@@ -5,6 +5,7 @@ services:
     rootDir: .
     buildCommand: |
       PUPPETEER_SKIP_DOWNLOAD=true npm install --no-audit --no-fund
+      unset PIP_USER PYTHONUSERBASE
       python3 -m pip install -r requirements.txt
     startCommand: >
       bash -lc "mkdir -p data/uploads tmp &&
@@ -17,6 +18,8 @@ services:
         value: production
       - key: NODE_VERSION
         value: 20.12.2
+      - key: PIP_USER
+        value: "0"
       - key: YARN_ENABLE_IMMUTABLE_INSTALLS
         value: "false"
       - key: OPENAI_API_KEY
