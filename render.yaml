@@ -1,0 +1,35 @@
+services:
+  - type: web
+    name: blivhort-ai
+    env: node
+    rootDir: fetcher
+    buildCommand: |
+      npm ci
+      python3 -m pip install --user -r requirements.txt
+    startCommand: >
+      bash -lc "mkdir -p data/uploads tmp &&
+      rm -rf uploads &&
+      ln -s data/uploads uploads &&
+      node server.js"
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: MODEL_ID
+        value: gpt-5
+      - key: PYTHON_BIN
+        value: python3
+      - key: PUPPETEER_SKIP_DOWNLOAD
+        value: "true"
+      - key: PUPPETEER_SKIP_CHROMIUM_DOWNLOAD
+        value: "true"
+      - key: NODE_OPTIONS
+        value: "--enable-source-maps --max-old-space-size=512"
+      - key: SESSION_SECRET
+        generateValue: true
+    disks:
+      - name: app-data
+        mountPath: /opt/render/project/src/fetcher/data
+        sizeGB: 1

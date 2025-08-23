@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-labelledby="title desc" style="color:#5A534B">
+  <title id="title">AI Opsummeringer – Favicon</title>
+  <desc id="desc">Super-minimalt favicon med terracotta konstellation og få grå stjerner.</desc>
+  <style>
+    :root { --accent:#E76F51; }
+    .noise  { fill: currentColor; opacity:.70; }
+    .line   { stroke: var(--accent); stroke-width:4; fill:none; stroke-linecap:round; stroke-linejoin:round; vector-effect:non-scaling-stroke; }
+    .node   { fill: var(--accent); }
+  </style>
+
+  <g class="noise">
+    <circle cx="12" cy="12" r="4.2"/>
+    <circle cx="22" cy="54" r="4.0"/>
+    <circle cx="52" cy="18" r="4.2"/>
+  </g>
+
+  <path class="line" d="M16 44 L30 28 L44 24 L54 38"/>
+  <circle class="node" cx="16" cy="44" r="4.2"/>
+  <circle class="node" cx="30" cy="28" r="4.6"/>
+  <circle class="node" cx="44" cy="24" r="4.0"/>
+  <circle class="node" cx="54" cy="38" r="4.2"/>
+</svg>
+
+

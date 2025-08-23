@@ -1,0 +1,2467 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Blivhørt AI</title>
+    <meta name="description" content="Analysér og opsummer høringssvar">
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/global-styles.css">
+    <script src="/js/data-cache.js?v=2"></script>
+    <style>
+        /* Page-specific styles */
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: var(--space-xs);
+            padding: 4px var(--space-sm);
+            border-radius: var(--radius-full);
+            font-size: var(--font-size-sm);
+            font-weight: 500;
+        }
+        
+        .status-badge.active {
+            background-color: var(--color-gray-100);
+            color: var(--color-dark);
+            border: 1px solid var(--color-gray-300);
+        }
+        
+        .status-badge.closed {
+            background-color: var(--color-gray-200);
+            color: var(--color-gray-600);
+            border: 1px solid var(--color-gray-400);
+        }
+        .page-header {
+            background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-dark) 100%);
+            color: var(--color-white);
+            padding: var(--space-xl) var(--space-2xl);
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .page-header::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            right: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%);
+            animation: float 20s ease-in-out infinite;
+        }
+        
+        @keyframes float {
+            0%, 100% { transform: translate(0, 0); }
+            50% { transform: translate(-50px, 50px); }
+        }
+
+        .header-content {
+            position: relative;
+            z-index: 1;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: var(--space-xl);
+        }
+        
+        .header-left {
+            display: flex;
+            align-items: center;
+            gap: var(--space-lg);
+        }
+        
+        .header-logo {
+            width: 80px;
+            height: 80px;
+            background: var(--color-white);
+            border-radius: var(--radius-md);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: var(--shadow-md);
+        }
+        
+        .header-title {
+            font-size: var(--font-size-2xl);
+            font-weight: 700;
+            margin: 0;
+        }
+        
+        .header-meta {
+            font-size: var(--font-size-sm);
+            opacity: 0.9;
+            margin-top: var(--space-xs);
+            display: flex;
+            align-items: center;
+            gap: var(--space-md);
+        }
+        
+        .header-actions {
+            display: flex;
+            gap: var(--space-sm);
+        }
+
+        /* Wizard styles */
+        .wizard-nav {
+            background: var(--color-white);
+            border-bottom: 1px solid var(--color-gray-200);
+            padding: var(--space-md) var(--space-xl);
+            display: flex;
+            justify-content: center;
+        }
+        
+        .wizard-steps {
+            display: flex;
+            align-items: center;
+            gap: var(--space-xl);
+            justify-content: center;
+        }
+        
+        .wizard-step {
+            display: flex;
+            align-items: center;
+            gap: var(--space);
+            padding: var(--space-md) var(--space-md);
+            border-radius: var(--radius-full);
+            cursor: pointer;
+            transition: all var(--transition-base);
+            color: var(--color-gray-500);
+            background: transparent;
+        }
+        
+        .wizard-step.active {
+            color: var(--color-primary);
+            background: rgba(231, 111, 81, 0.1);
+        }
+        
+        .wizard-step.completed {
+            color: var(--color-success);
+        }
+        
+        .wizard-step-number {
+            width: 28px;
+            height: 28px;
+            border-radius: var(--radius-full);
+            background: var(--color-gray-200);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 600;
+            font-size: var(--font-size-sm);
+            transition: all var(--transition-base);
+        }
+        
+        .wizard-step.active .wizard-step-number {
+            background: var(--color-primary);
+            color: var(--color-white);
+        }
+        
+        .wizard-step.completed .wizard-step-number {
+            background: var(--color-success);
+            color: var(--color-white);
+        }
+
+        /* Step content styles */
+        .step-content {
+            background: var(--color-white);
+            padding: var(--space-2xl);
+            min-height: 400px;
+        }
+        
+        /* Table styles */
+        .responses-table {
+            width: 100%;
+            border-collapse: collapse;
+            background: var(--color-white);
+            border-radius: var(--radius-lg);
+            overflow: hidden;
+            box-shadow: var(--shadow-sm);
+        }
+        
+        .responses-table th {
+            background: var(--color-gray-100);
+            padding: var(--space-md);
+            text-align: left;
+            font-weight: 600;
+            color: var(--color-dark);
+            border-bottom: 2px solid var(--color-gray-200);
+        }
+        
+        .responses-table td {
+            padding: var(--space-md);
+            border-bottom: 1px solid var(--color-gray-100);
+            vertical-align: top;
+        }
+        
+        .responses-table tr:hover {
+            background: var(--color-gray-50);
+        }
+        
+        .response-checkbox {
+            width: 20px;
+            height: 20px;
+            cursor: pointer;
+        }
+
+        /* Material styles */
+        .material-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: var(--space-lg);
+            margin-top: var(--space-lg);
+        }
+        
+        .material-card {
+            background: var(--color-white);
+            border: 2px solid var(--color-gray-200);
+            border-radius: var(--radius-lg);
+            padding: var(--space-lg);
+            transition: all var(--transition-base);
+            cursor: pointer;
+        }
+        
+        .material-card:hover {
+            border-color: var(--color-primary);
+            box-shadow: var(--shadow-md);
+        }
+        
+        .material-card.selected {
+            border-color: var(--color-primary);
+            background: rgba(231, 111, 81, 0.05);
+        }
+        
+        .material-icon {
+            width: 40px;
+            height: 40px;
+            background: var(--color-gray-100);
+            border-radius: var(--radius-md);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: var(--space-md);
+            color: var(--color-primary);
+        }
+        
+        .material-title {
+            font-weight: 600;
+            color: var(--color-dark);
+            margin-bottom: var(--space-sm);
+        }
+        
+        .material-description {
+            font-size: var(--font-size-sm);
+            color: var(--color-gray-600);
+            line-height: 1.5;
+        }
+
+        /* Summary generation styles */
+        .summary-section {
+            background: var(--color-gray-100);
+            padding: var(--space-2xl);
+            border-radius: var(--radius-lg);
+            margin-top: var(--space-xl);
+            max-width: 1600px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        
+        .summary-variants {
+            display: grid;
+            grid-template-columns: repeat(3, minmax(420px, 1fr));
+            gap: var(--space-lg);
+            margin-top: var(--space-xl);
+            max-width: 100%;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        
+        .summary-variant {
+            background: var(--color-white);
+            border: 2px solid var(--color-gray-200);
+            border-radius: var(--radius-lg);
+            padding: var(--space-xl);
+            transition: all var(--transition-base);
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .summary-variant.selected {
+            border-color: var(--color-primary);
+            box-shadow: 0 0 0 3px rgba(231,111,81,0.35);
+            outline: 2px solid var(--color-primary);
+            outline-offset: 0;
+        }
+        
+        .summary-variant-header {
+            display: flex;
+            align-items: center;
+            gap: var(--space-md);
+            margin-bottom: var(--space-md);
+        }
+        
+        .summary-radio {
+            width: 20px;
+            height: 20px;
+            accent-color: var(--color-primary);
+        }
+        
+        .summary-preview {
+            background: var(--color-gray-50);
+            padding: var(--space-lg);
+            border-radius: var(--radius-md);
+            font-family: var(--font-sans);
+            line-height: 1.6;
+            max-height: 420px;
+            overflow-y: auto;
+        }
+
+        /* Progress indicator */
+        .progress-bar {
+            background: var(--color-gray-200);
+            height: 4px;
+            border-radius: var(--radius-full);
+            overflow: hidden;
+            margin-bottom: var(--space-md);
+        }
+        
+        .progress-fill {
+            background: var(--color-primary);
+            height: 100%;
+            transition: width 0.3s ease;
+            border-radius: var(--radius-full);
+        }
+        
+        /* Action buttons section */
+        .action-section {
+            background: var(--color-white);
+            border-top: 1px solid var(--color-gray-200);
+            padding: var(--space-lg) var(--space-xl);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: sticky;
+            bottom: 0;
+            z-index: 100;
+            box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.05);
+        }
+        
+        .action-info {
+            font-size: var(--font-size-sm);
+            color: var(--color-gray-600);
+        }
+        
+        .action-buttons {
+            display: flex;
+            gap: var(--space-md);
+        }
+
+        /* Response detail styles */
+        .response-meta {
+            font-size: var(--font-size-sm);
+            color: var(--color-gray-600);
+            margin-bottom: var(--space-sm);
+            display: flex;
+            align-items: center;
+            gap: var(--space-md);
+            flex-wrap: wrap;
+        }
+        
+        .response-text {
+            background: var(--color-gray-50);
+            padding: var(--space-md);
+            border-radius: var(--radius-md);
+            font-size: var(--font-size-sm);
+            line-height: 1.6;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+        
+        .attachment-list {
+            display: flex;
+            flex-direction: column;
+            gap: var(--space-sm);
+            margin-top: var(--space-sm);
+        }
+        
+        .attachment-item {
+            display: flex;
+            align-items: center;
+            gap: var(--space-sm);
+            font-size: var(--font-size-sm);
+        }
+        
+        .attachment-link {
+            color: var(--color-primary);
+            text-decoration: none;
+            display: flex;
+            align-items: center;
+            gap: var(--space-xs);
+        }
+        
+        .attachment-link:hover {
+            text-decoration: underline;
+        }
+        
+        /* Loading states */
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(255, 255, 255, 0.95);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 2000;
+            display: none;
+        }
+        
+        .loading-overlay.show {
+            display: flex;
+        }
+        
+        /* Spinner styles */
+        .spinner {
+            width: 48px;
+            height: 48px;
+            border: 3px solid var(--color-gray-200);
+            border-top-color: var(--color-primary);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+        
+        @keyframes slideOut {
+            from { transform: translateX(0); opacity: 1; }
+            to { transform: translateX(100%); opacity: 0; }
+        }
+        
+        /* Responsive design */
+
+        @media (max-width: 768px) {
+            .page-header {
+                padding: var(--space-lg) var(--space-md);
+            }
+            
+            .header-content {
+                flex-direction: column;
+                gap: var(--space-md);
+                text-align: center;
+            }
+            
+            .header-actions {
+                width: 100%;
+                justify-content: center;
+            }
+            
+            .wizard-steps {
+                gap: var(--space-md);
+            }
+            
+            .wizard-step-label {
+                display: none;
+            }
+            
+            .material-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .action-section {
+                flex-direction: column;
+                gap: var(--space-md);
+                text-align: center;
+            }
+            
+            .action-buttons {
+                width: 100%;
+                justify-content: center;
+            }
+        }
+
+        @media (max-width: 1200px) {
+            .summary-variants { grid-template-columns: repeat(2, minmax(320px, 1fr)); }
+        }
+        @media (max-width: 768px) {
+            .summary-variants { grid-template-columns: 1fr; }
+        }
+
+        /* QA column styles */
+        .qa-field {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            margin-bottom: var(--space-sm);
+        }
+        .qa-field label {
+            font-size: var(--font-size-sm);
+            color: var(--color-gray-600);
+        }
+        .qa-input, .qa-select {
+            width: 100%;
+            padding: 6px 8px;
+            border: 1px solid var(--color-gray-300);
+            border-radius: var(--radius-sm);
+            font-size: var(--font-size-sm);
+            background: var(--color-white);
+        }
+
+        /* Modal for material reading */
+        .modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.4);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 3000;
+        }
+        .modal-overlay.show { display: flex; }
+        .modal-card {
+            background: var(--color-white);
+            border-radius: var(--radius-lg);
+            box-shadow: var(--shadow-lg);
+            max-width: 900px;
+            width: 90vw;
+            max-height: 80vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        .modal-header {
+            padding: var(--space-md) var(--space-lg);
+            border-bottom: 1px solid var(--color-gray-200);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .modal-body {
+            padding: var(--space-lg);
+            overflow: auto;
+            white-space: pre-wrap;
+        }
+
+        /* Markdown tree renderer */
+        .md-tree { list-style: none; padding-left: 0; }
+        .md-node { border-left: 2px solid var(--color-gray-200); margin-left: 0; padding-left: var(--space-md); }
+        .md-node + .md-node { margin-top: var(--space-sm); }
+        .md-header { display: flex; align-items: center; gap: 8px; cursor: pointer; }
+        .md-toggle {
+            width: 18px; height: 18px; border-radius: 4px; border: 1px solid var(--color-gray-300);
+            display: inline-flex; align-items: center; justify-content: center; font-size: 12px; color: var(--color-gray-700);
+            background: var(--color-gray-50);
+        }
+        .md-title { font-weight: 600; color: var(--color-dark); }
+        .md-h1 .md-title { font-size: 1.1rem; }
+        .md-h2 .md-title { font-size: 1rem; }
+        .md-h3 .md-title { font-size: 0.95rem; }
+        .md-children { margin-top: var(--space-sm); }
+        .md-node.collapsed > .md-children { display: none; }
+        .md-content p { margin: 0 0 var(--space-xs) 0; color: var(--color-gray-700); }
+        .md-content ul { margin: 0 0 var(--space-xs) var(--space-lg); padding: 0; }
+        .md-content li { margin: 0 0 4px 0; }
+        /* Hide paragraphs by default; show when explicitly expanded */
+        .md-children .md-paragraph { display: none; }
+        .md-node.show-content > .md-children .md-paragraph { display: block; }
+
+        /* Headings preview (hierarchy, no bullets) */
+        .heading-list { display: flex; flex-direction: column; gap: 4px; }
+        .heading-item { padding: 6px 8px; border-left: 2px solid var(--color-gray-200); background: var(--color-gray-50); border-radius: 4px; cursor: pointer; }
+        .heading-title { display: block; color: var(--color-dark); }
+        .hlvl-1 { margin-left: 0; }
+        .hlvl-2 { margin-left: 12px; }
+        .hlvl-3 { margin-left: 24px; }
+        .hlvl-4 { margin-left: 36px; }
+        .hlvl-5 { margin-left: 48px; }
+        .hlvl-6 { margin-left: 60px; }
+        .hlvl-1 .heading-title { font-weight: 700; font-size: 1.05rem; }
+        .hlvl-2 .heading-title { font-weight: 600; }
+        /* Enhanced visual hierarchy for preview headings */
+        .hlvl-1 { border-left-color: var(--color-primary); border-left-width: 3px; }
+        .hlvl-2 { border-left-color: var(--color-primary); }
+        .hlvl-3 { border-left-color: var(--color-gray-300); }
+        .hlvl-4 { border-left-color: var(--color-gray-300); opacity: 0.95; }
+        .hlvl-5, .hlvl-6 { border-left-color: var(--color-gray-200); opacity: 0.9; }
+        .hlvl-3 .heading-title { font-weight: 600; font-size: 0.95rem; }
+        .hlvl-4 .heading-title { font-weight: 600; font-size: 0.9rem; }
+        .hlvl-5 .heading-title { font-weight: 500; font-size: 0.9rem; }
+        .hlvl-6 .heading-title { font-weight: 500; font-size: 0.9rem; opacity: 0.9; }
+        .heading-item + .heading-item { margin-top: 4px; }
+        /* Collapsible children container (hidden by default per item) */
+        .heading-children { margin-top: 4px; display: none; }
+        .heading-item.expanded > .heading-children { display: block; }
+    </style>
+</head>
+<body>
+    <!-- SVG Icon Sprite -->
+    <object data="/icons.svg" type="image/svg+xml" style="display: none;"></object>
+    
+    <!-- Page Header -->
+    <header class="page-header">
+    <div class="container">
+            <div class="header-content">
+                <div class="header-left">
+                    <div class="header-logo">
+                        <img src="/favicon.svg" alt="Blivhørt AI" style="width: 70px; height: 70px;">
+                    </div>
+                <div>
+                        <h1 id="headerTitle" class="header-title">Indlæser...</h1>
+                        <div class="header-meta">
+                            <span class="status-badge" id="headerStatusBadge">
+                                <svg class="icon icon-sm">
+                                    <use href="/icons.svg#icon-info"></use>
+                                </svg>
+                                <span id="headerStatus">-</span>
+                            </span>
+                            <span style="display: flex; align-items: center; gap: var(--space-xs);">
+                                <svg class="icon icon-sm">
+                                    <use href="/icons.svg#icon-calendar"></use>
+                                </svg>
+                                <span id="headerDeadline">-</span>
+                            </span>
+                            <a id="headerLink" href="#" target="_blank" class="btn btn-sm btn-ghost" style="color: var(--color-white);">
+                                <svg class="icon icon-sm">
+                                    <use href="/icons.svg#icon-link"></use>
+                                </svg>
+                                Se på Blivhørt
+                            </a>
+                    </div>
+                </div>
+            </div>
+                <div class="header-actions">
+                    <a href="/" class="btn btn-secondary">
+                        <svg class="icon">
+                            <use href="/icons.svg#icon-arrow-left"></use>
+                        </svg>
+                        Tilbage
+                    </a>
+                    <button class="btn btn-secondary" onclick="refreshFromNetwork()" title="Hent frisk data">
+                        <svg class="icon">
+                            <use href="/icons.svg#icon-refresh"></use>
+                        </svg>
+                        <span class="hide-mobile">Opdater</span>
+                    </button>
+        </div>
+            </div>
+        </div>
+    </header>
+
+    
+    <!-- Main Content -->
+    <main class="container">
+        <!-- Wizard Navigation -->
+        <nav class="wizard-nav" id="wizardNav" style="display: none;">
+            <div class="wizard-steps">
+                <button class="wizard-step active" onclick="goToStep(1)" id="wizardStep1">
+                    <span class="wizard-step-number">
+                        <svg class="icon icon-sm" id="stepIcon1">
+                            <use href="/icons.svg#icon-document"></use>
+                        </svg>
+                    </span>
+                    <span class="wizard-step-label">Høringssvar</span>
+                </button>
+                
+                <svg class="icon" style="color: var(--color-gray-300);">
+                    <use href="/icons.svg#icon-arrow-right"></use>
+                </svg>
+                
+                <button class="wizard-step" onclick="goToStep(2)" id="wizardStep2">
+                    <span class="wizard-step-number">
+                        <svg class="icon icon-sm" id="stepIcon2">
+                            <use href="/icons.svg#icon-attachment"></use>
+                        </svg>
+                    </span>
+                    <span class="wizard-step-label">Materialer</span>
+                </button>
+                
+                <svg class="icon" style="color: var(--color-gray-300);">
+                    <use href="/icons.svg#icon-arrow-right"></use>
+                </svg>
+                
+                <button class="wizard-step" onclick="goToStep(3)" id="wizardStep3">
+                    <span class="wizard-step-number">
+                        <svg class="icon icon-sm" id="stepIcon3">
+                            <use href="/icons.svg#icon-ai"></use>
+                        </svg>
+                    </span>
+                    <span class="wizard-step-label">Opsummér</span>
+                </button>
+            </div>
+        </nav>
+
+        
+        <!-- Step 1: Responses -->
+        <section id="step-1" class="step-content" style="display: none;">
+            <div class="mb-lg">
+                <h2 class="flex items-center gap-md">
+                    <svg class="icon icon-lg" style="color: var(--color-primary);">
+                        <use href="/icons.svg#icon-document"></use>
+                    </svg>
+                    Forbered høringssvar
+                </h2>
+                <p style="color: var(--color-gray-600); margin-top: var(--space-sm);">
+                    Tildel navn og type til høringssvarene
+                </p>
+                <div class="mt-sm" style="display: flex; gap: var(--space-sm);">
+                    <button class="btn btn-secondary" id="autoClassifyBtn" onclick="autoClassifyRespondents()" title="Udfyld automatisk respondentnavn og -type med AI">
+                        <svg class="icon">
+                            <use href="/icons.svg#icon-ai"></use>
+                        </svg>
+                        Udfyld navne/typer (AI)
+                    </button>
+                </div>
+                    </div>
+            
+            <div id="tableContainer" style="display: none;">
+                <table class="responses-table">
+                        <thead>
+                            <tr>
+                            <th>Høringssvar</th>
+                            <th style="width: 280px;">Kvalitetssikring</th>
+                            </tr>
+                        </thead>
+                        <tbody id="responsesTable"></tbody>
+                    </table>
+                    </div>
+            <div class="mt-lg" style="margin-top: var(--space-lg); text-align: right;">
+                <button class="btn btn-primary" id="approveStep1Btn" onclick="approveStep(1)">Godkend</button>
+            </div>
+        </section>
+
+        
+        <!-- Step 2: Materials -->
+        <section id="step-2" class="step-content" style="display: none;">
+            <div class="mb-lg">
+                <h2 class="flex items-center gap-md">
+                    <svg class="icon icon-lg" style="color: var(--color-primary);">
+                        <use href="/icons.svg#icon-attachment"></use>
+                    </svg>
+                    Vælg materialer
+                </h2>
+                <p style="color: var(--color-gray-600); margin-top: var(--space-sm);">
+                    Vælg hvilke baggrundsmaterialer der skal inkluderes i analysen
+                </p>
+                    </div>
+            
+            <div id="materialsContainer" style="display: none;">
+                <div id="materialsContent" class="material-grid"></div>
+                
+                <div class="mt-xl">
+                    <label class="btn btn-secondary" style="cursor: pointer;">
+                        <svg class="icon">
+                            <use href="/icons.svg#icon-upload"></use>
+                        </svg>
+                        Upload eget dokument
+                            <input type="file" id="uploadInput" style="display: none" onchange="handleUpload(event)">
+                        </label>
+                    <div id="uploadsList" class="mt-md" style="font-size: var(--font-size-sm); color: var(--color-gray-600);"></div>
+                    </div>
+                </div>
+                <div class="mt-lg" style="margin-top: var(--space-lg); text-align: right;">
+                    <button class="btn btn-primary" id="approveStep2Btn" onclick="approveStep(2)">Godkend</button>
+                </div>
+        </section>
+
+        <!-- Material Modal -->
+        <div id="materialModal" class="modal-overlay" role="dialog" aria-modal="true" aria-hidden="true">
+            <div class="modal-card">
+                <div class="modal-header">
+                    <div id="materialModalTitle" style="font-weight:600;">Materiale</div>
+                    <button class="btn btn-secondary" onclick="closeMaterial()">Luk</button>
+                </div>
+                <div id="materialModalBody" class="modal-body"></div>
+            </div>
+        </div>
+        
+        <!-- Step 3: Summary Generation -->
+        <section id="step-3" class="step-content" style="display: none;">
+            <div class="mb-lg" style="text-align: center;">
+                <h2 class="flex items-center gap-md">
+                    <svg class="icon icon-lg" style="color: var(--color-primary);">
+                        <use href="/icons.svg#icon-ai"></use>
+                    </svg>
+                    Vælg opsummering
+                </h2>
+                <button id="genBtn" class="btn btn-primary btn-lg" onclick="generateSummaries()" style="margin: 80px auto;">
+                    <svg class="icon">
+                        <use href="/icons.svg#icon-ai"></use>
+                    </svg>
+                    Generér opsummeringer
+                </button>
+            </div>
+
+            <div class="summary-section">
+
+                
+                <div id="genProgress" style="display: none; margin-top: var(--space-lg);" aria-live="polite">
+                    <div class="progress-bar">
+                        <div class="progress-fill" style="width: 0%" id="progressBar"></div>
+                </div>
+                    <p class="text-center" style="color: var(--color-gray-600);" id="genProgress2"></p>
+                    </div>
+                
+                <div id="summariesContainer" style="display: none;" aria-live="polite">
+                    <div id="summariesContent" class="summary-variants"></div>
+                </div>
+            </div>
+        </section>
+        
+        <!-- Action Bar -->
+        <div class="action-section" id="actionBar" style="display: none;">
+            <div class="action-info" style="display: none;">
+                <span id="selectionInfo" style="display: none;">0 høringssvar valgt</span>
+        </div>
+            <div class="action-buttons">
+                <button class="btn btn-primary" onclick="downloadSelectedDocx()" id="downloadBtn" style="display: none;">
+                    <svg class="icon">
+                        <use href="/icons.svg#icon-download"></use>
+                    </svg>
+                    Download DOCX
+                </button>
+                <button class="btn btn-secondary" onclick="testDocxBuilder()" id="testBtn" style="display:none;">
+                    <svg class="icon">
+                        <use href="/icons.svg#icon-check"></use>
+                    </svg>
+                    Test DOCX-bygger
+                </button>
+            </div>
+        </div>
+    </main>
+    
+    <!-- Loading Overlay -->
+    <div id="loadingOverlay" class="loading-overlay">
+        <div style="display:flex; flex-direction:column; align-items:center; justify-content:center; gap: var(--space-md);">
+            <div class="spinner"></div>
+            <p style="color: var(--color-gray-600); text-align: center; margin:0;">Henter høringsdata...</p>
+        </div>
+    </div>
+    
+    <!-- Notifications -->
+    <div id="notifications" style="position: fixed; top: var(--space-md); right: var(--space-md); z-index: 3000;"></div>
+
+    <script>
+        // Register service worker
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/service-worker.js')
+                .then(registration => console.log('Service Worker registered'))
+                .catch(error => console.log('Service Worker registration failed:', error));
+        }
+        
+        let lastFetched = { hearing: null, responses: [], materials: [], uploads: [] };
+        let lastSummaries = [];
+        let sseRetryAttempted = false;
+        const includeState = { responses: new Map(), attachments: new Map() };
+        const RESPONDENT_TYPES = [
+            'Borger', 'Interesseorganisation', 'Lokaludvalg', 'Offentlig myndighed', 'Beboergruppe'
+        ];
+        const approvedSteps = { 1: false, 2: false };
+
+        // Get hearing ID from URL parameter
+        function getHearingIdFromUrl() {
+            const params = new URLSearchParams(window.location.search);
+            let id = params.get('id');
+            if (id && id.includes('?')) {
+                const [cleanId] = id.split('?');
+                id = cleanId;
+            }
+            return id;
+        }
+
+        // Initialize page
+        document.addEventListener('DOMContentLoaded', async function() {
+            // Initialize data cache
+            if (window.dataCache) {
+                await window.dataCache.init();
+            }
+            
+            const hearingId = getHearingIdFromUrl();
+            if (hearingId) {
+                fetchHearingDataById(hearingId);
+            } else {
+                showError('Intet hørings-ID angivet');
+            }
+        });
+
+        async function fetchHearingDataById(hearingId) {
+            // Avoid blocking overlay on initial attempt; only show overlay if we actually scrape
+            let shouldShowOverlay = false;
+            // Clear any existing notifications
+            const notificationsContainer = document.getElementById('notifications');
+            if (notificationsContainer) {
+                notificationsContainer.innerHTML = '';
+            }
+
+            try {
+                // Try cache first for instant loading
+                if (window.dataCache) {
+                    const cachedHearing = await window.dataCache.getHearing(hearingId);
+                    const cachedResponses = await window.dataCache.getResponses(hearingId);
+                    
+                    if (cachedHearing && cachedHearing.hearing) {
+                        // Display cached data immediately
+                        lastFetched = { 
+                            hearing: cachedHearing.hearing, 
+                            responses: cachedResponses || cachedHearing.responses || [], 
+                            materials: [], 
+                            uploads: [] 
+                        };
+                        applySavedEdits();
+                        displayHearingInfo(cachedHearing.hearing);
+                        displayResponses(lastFetched.responses);
+                        showLoading(false);
+                        
+                        // Load materials from cache
+                        const cachedMaterials = await window.dataCache.getMaterials(hearingId);
+                        if (cachedMaterials) {
+                            lastFetched.materials = cachedMaterials;
+                            displayMaterials(cachedMaterials);
+                        }
+                        // Load session uploads
+                        try {
+                            const ur = await fetch(`/api/session/uploads/${encodeURIComponent(hearingId)}`);
+                            const uj = await ur.json();
+                            if (uj && uj.success && Array.isArray(uj.files)) {
+                                lastFetched.uploads = uj.files.map(f => ({ url: null, originalName: f.originalName, path: f.path }));
+                                const list = document.getElementById('uploadsList');
+                                if (list) {
+                                    list.innerHTML = '';
+                                    lastFetched.uploads.forEach(u => {
+                                        const item = document.createElement('div');
+                                        item.textContent = `Tilføjet: ${u.originalName}`;
+                                        list.appendChild(item);
+                                    });
+                                }
+                            }
+                        } catch {}
+                        
+                        // Then fetch fresh data in background
+                        fetchFreshData(hearingId, true);
+                        return;
+                    }
+                }
+                
+                // No cache: try DB-only (non-blocking) first
+                try {
+                    const rdb = await fetch(`/api/hearing/${encodeURIComponent(hearingId)}?db=1`);
+                    const jdb = await rdb.json().catch(()=>({}));
+                    if (jdb && jdb.success && jdb.found && jdb.hearing) {
+                        lastFetched = { hearing: jdb.hearing, responses: jdb.responses || [], materials: [], uploads: [] };
+                        applySavedEdits();
+                        displayHearingInfo(lastFetched.hearing);
+                        displayResponses(lastFetched.responses);
+                        // Materials DB-only
+                        try {
+                            const rmat = await fetch(`/api/hearing/${encodeURIComponent(hearingId)}/materials?db=1`);
+                            const jmat = await rmat.json().catch(()=>({}));
+                            if (jmat && jmat.success && Array.isArray(jmat.materials)) {
+                                lastFetched.materials = jmat.materials;
+                                displayMaterials(lastFetched.materials);
+                            }
+                        } catch {}
+                        // Session uploads
+                        try {
+                            const ur = await fetch(`/api/session/uploads/${encodeURIComponent(hearingId)}`);
+                            const uj = await ur.json();
+                            if (uj && uj.success && Array.isArray(uj.files)) {
+                                lastFetched.uploads = uj.files.map(f => ({ url: null, originalName: f.originalName, path: f.path }));
+                                const list = document.getElementById('uploadsList');
+                                if (list) {
+                                    list.innerHTML = '';
+                                    lastFetched.uploads.forEach(u => {
+                                        const item = document.createElement('div');
+                                        item.textContent = `Tilføjet: ${u.originalName}`;
+                                        list.appendChild(item);
+                                    });
+                                }
+                            }
+                        } catch {}
+                        return; // done
+                    }
+                } catch {}
+
+                // Still nothing: fall back to network with overlay
+                shouldShowOverlay = true;
+                if (shouldShowOverlay) showLoading(true);
+                await fetchFreshData(hearingId, false);
+            } catch (error) {
+                showError('Netværksfejl. Tjek venligst din internetforbindelse og prøv igen.');
+                console.error('Error:', error);
+                if (shouldShowOverlay) showLoading(false);
+            }
+        }
+        
+        async function fetchFreshData(hearingId, isBackgroundUpdate) {
+            try {
+                const timestamp = new Date().getTime();
+                const preferPersist = true;
+                const response = await fetch(`/api/hearing/${hearingId}?t=${timestamp}${preferPersist?'&persist=1':''}`, {
+                    cache: 'no-cache',
+                    headers: {
+                        'Cache-Control': 'no-cache'
+                    }
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    // Update cache
+                    if (window.dataCache) {
+                        await window.dataCache.setHearing(hearingId, data);
+                        if (data.responses) {
+                            await window.dataCache.setResponses(hearingId, data.responses);
+                        }
+                    }
+                    
+                    if (!isBackgroundUpdate) {
+                        // Clear any existing notifications
+                        const notificationsContainer = document.getElementById('notifications');
+                        if (notificationsContainer) {
+                            notificationsContainer.innerHTML = '';
+                        }
+                        lastFetched = { hearing: data.hearing, responses: data.responses, materials: [], uploads: [] };
+                        applySavedEdits();
+                        displayHearingInfo(data.hearing);
+                        displayResponses(lastFetched.responses);
+                        showLoading(false);
+                    } else if (data.hearing.title !== lastFetched.hearing.title || 
+                             data.responses.length !== lastFetched.responses.length) {
+                        // Update UI if data changed
+                        lastFetched = { hearing: data.hearing, responses: data.responses, materials: lastFetched.materials, uploads: [] };
+                        applySavedEdits();
+                        displayHearingInfo(data.hearing);
+                        displayResponses(lastFetched.responses);
+                        showSuccess('Data opdateret');
+                    }
+                    
+                    // Fetch materials
+                    fetchMaterials(data.hearing.id).catch(() => {});
+                } else {
+                    if (!isBackgroundUpdate) {
+                        showError(data.message || 'Der opstod en fejl ved hentning af data');
+                        showLoading(false);
+                    }
+                }
+            } catch (error) {
+                if (!isBackgroundUpdate) {
+                    showError('Netværksfejl. Tjek venligst din internetforbindelse og prøv igen.');
+                    console.error('Error:', error);
+                    showLoading(false);
+                }
+            }
+        }
+
+        async function fetchMaterials(hearingId) {
+            try {
+                const timestamp = new Date().getTime();
+                const preferPersist = true;
+                const r = await fetch(`/api/hearing/${hearingId}/materials?t=${timestamp}${preferPersist?'&persist=1':''}`, { 
+                    cache: 'no-cache', 
+                    headers: { 'Cache-Control': 'no-cache' } 
+                });
+                const json = await r.json();
+                if (json && json.success && Array.isArray(json.materials)) {
+                    lastFetched.materials = json.materials;
+                    displayMaterials(lastFetched.materials);
+                    
+                    // Update cache
+                    if (window.dataCache) {
+                        await window.dataCache.setMaterials(hearingId, json.materials);
+                    }
+                }
+            } catch (_) {}
+        }
+
+        async function refreshFromNetwork() {
+            const hearingId = getHearingIdFromUrl();
+            if (!hearingId) return showError('Intet hørings-ID angivet');
+            showLoading(true);
+            // Clear any existing notifications
+            const notificationsContainer = document.getElementById('notifications');
+            if (notificationsContainer) {
+                notificationsContainer.innerHTML = '';
+            }
+            try {
+                const t = Date.now();
+                const resp = await fetch(`/api/hearing/${hearingId}?nocache=1&t=${t}`, { cache: 'no-cache', headers: { 'Cache-Control': 'no-cache' } });
+                const data = await resp.json();
+                if (data && data.success) {
+                    lastFetched = { hearing: data.hearing, responses: data.responses, materials: [] };
+                    applySavedEdits();
+                    displayHearingInfo(data.hearing);
+                    // Refresh materials too from network
+                    const r2 = await fetch(`/api/hearing/${hearingId}/materials?nocache=1&t=${t}`, { cache: 'no-cache', headers: { 'Cache-Control': 'no-cache' } });
+                    const j2 = await r2.json().catch(()=>({}));
+                    if (j2 && j2.success && Array.isArray(j2.materials)) {
+                        lastFetched.materials = j2.materials;
+                        displayMaterials(lastFetched.materials);
+                    }
+                    displayResponses(lastFetched.responses);
+                    showSuccess('Opdateret fra netværk');
+                } else {
+                    showError('Kunne ikke opdatere fra netværk');
+                }
+            } catch (e) {
+                showError('Netværksfejl ved opdatering');
+            } finally {
+                showLoading(false);
+            }
+        }
+
+        function displayHearingInfo(hearing) {
+            const deadlineText = hearing.deadline ? 
+                new Date(hearing.deadline).toLocaleDateString('da-DK', { 
+                    day: '2-digit', 
+                    month: 'long', 
+                    year: 'numeric' 
+                }) : 'Ikke angivet';
+            
+            const statusText = hearing.status || 'ukendt';
+            const isOpen = computeIsOpen(statusText, hearing.deadline);
+            
+            // Update header elements
+            const headerTitle = document.getElementById('headerTitle');
+            const headerStatus = document.getElementById('headerStatus');
+            const headerStatusBadge = document.getElementById('headerStatusBadge');
+            const headerDeadline = document.getElementById('headerDeadline');
+            const headerLink = document.getElementById('headerLink');
+            
+            if (headerTitle) headerTitle.textContent = hearing.title || 'Ingen titel';
+            if (headerStatus) headerStatus.textContent = statusText;
+            if (headerStatusBadge) {
+                headerStatusBadge.className = `status-badge ${isOpen ? 'active' : 'closed'}`;
+                headerStatusBadge.innerHTML = `<span>${statusText}</span>`;
+            }
+            if (headerDeadline) headerDeadline.textContent = deadlineText;
+            if (headerLink) headerLink.href = hearing.url || '#';
+            
+            // Show wizard navigation
+            document.getElementById('wizardNav').style.display = 'block';
+            document.getElementById('actionBar').style.display = 'flex';
+        }
+
+        function displayResponses(responses) {
+            const tableBody = document.getElementById('responsesTable');
+            
+            if (responses.length === 0) {
+                tableBody.innerHTML = `
+                    <tr>
+                        <td colspan="2" style="text-align: center; padding: 40px; color: #6c757d;">
+                            Ingen høringssvar fundet for denne høring.
+                        </td>
+                    </tr>
+                `;
+            } else {
+                tableBody.innerHTML = responses.map(response => {
+                    const hasAttachments = response.attachments && response.attachments.length > 0;
+                    const rn = (response.respondentName || 'Borger');
+                    const rt = (response.respondentType || 'Borger');
+                    const options = RESPONDENT_TYPES.map(t => `<option value="${t}" ${t===rt?'selected':''}>${t}</option>`).join('');
+                    return `
+                        <tr>
+                            <td>
+                                <div style="font-weight: 600; margin-bottom: 6px;">Svar #${response.id}</div>
+                                <div class="response-text">
+                                    ${(response.text||'').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+                                </div>
+                                ${hasAttachments ? `
+                                <div class="attachment-list" style="margin-top: 8px;">
+                                    ${response.attachments.map((att, idx) => {
+                                        const aid = `att-${response.id}-${idx}`;
+                                        return `<div class="attachment-item">
+                                            <input type="checkbox" id="${aid}" checked onchange="toggleIncludeAttachment(${response.id}, ${idx}, this.checked); window.updateTokenInfo && window.updateTokenInfo()" />
+                                            <a class="attachment-link" href="${att.url}" target="_blank">📄 ${att.filename}</a>
+                                        </div>`;
+                                    }).join('')}
+                                </div>` : ''}
+                            </td>
+                            <td>
+                                <div class="qa-field">
+                                    <label for="rname-${response.id}">Respondentnavn</label>
+                                    <input id="rname-${response.id}" class="qa-input" type="text" value="${(rn||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}" oninput="updateRespondentName(${response.id}, this.value)" />
+                                </div>
+                                <div class="qa-field">
+                                    <label for="rtype-${response.id}">Respondenttype</label>
+                                    <select id="rtype-${response.id}" class="qa-select" onchange="updateRespondentType(${response.id}, this.value)">${options}</select>
+                                </div>
+                            </td>
+                        </tr>
+                    `;
+                }).join('');
+            }
+            
+            document.getElementById('tableContainer').style.display = 'block';
+            document.getElementById('step-1').style.display = 'block';
+            updateSelectionInfo();
+        }
+
+        async function displayMaterials(materials) {
+            const materialsContainer = document.getElementById('materialsContainer');
+            const materialsContent = document.getElementById('materialsContent');
+            
+            if (!materials || materials.length === 0) {
+                materialsContainer.style.display = 'none';
+                return;
+            }
+            
+            if (!lastFetched.materialInclude) lastFetched.materialInclude = [];
+            // Load session flags, default to true when absent
+            try {
+                if (lastFetched.hearing) {
+                    const r = await fetch(`/api/session/materials/${encodeURIComponent(lastFetched.hearing.id)}`);
+                    const j = await r.json();
+                    const flags = (j && j.success && j.flags) ? j.flags : {};
+                    lastFetched.materialInclude = materials.map((_, idx) => (flags[idx] !== undefined) ? !!flags[idx] : true);
+                } else {
+                    lastFetched.materialInclude = materials.map(() => true);
+                }
+            } catch { lastFetched.materialInclude = materials.map(() => true); }
+            
+            materialsContent.innerHTML = materials.map((material, idx) => {
+                const isFile = material.type === 'file';
+                const id = `mat-${idx}`;
+                
+                return `
+                    <div class="material-card selected" id="material-${idx}" onclick="toggleMaterialCard(${idx})">
+                        <div class="material-icon">
+                            <svg class="icon icon-lg">
+                                <use href="/icons.svg#icon-${isFile ? 'document' : 'info'}"></use>
+                            </svg>
+                        </div>
+                        <div class="material-title">${material.title}</div>
+                        ${material.description ? `<div class="material-description">${material.description}</div>` : ''}
+                        ${!isFile && material.content ? `
+                            <button class="btn btn-sm btn-secondary mt-sm" onclick="event.stopPropagation(); openMaterial(${idx});">
+                                <svg class="icon icon-sm"><use href="/icons.svg#icon-eye"></use></svg>
+                                Læs tekst
+                            </button>
+                        ` : ''}
+                        ${material.url ? `
+                            <a href="${material.url}" target="_blank" class="btn btn-sm btn-secondary mt-md" onclick="event.stopPropagation()">
+                                <svg class="icon icon-sm">
+                                    <use href="/icons.svg#icon-link"></use>
+                                </svg>
+                                Åbn dokument
+                            </a>
+                        ` : ''}
+                        <input type="checkbox" id="${id}" checked style="display: none;" />
+                    </div>
+                `;
+            }).join('');
+            
+            materialsContainer.style.display = 'block';
+            updateSelectionInfo();
+        }
+        
+        function toggleMaterialCard(idx) {
+            const card = document.getElementById(`material-${idx}`);
+            const checkbox = document.getElementById(`mat-${idx}`);
+            const isSelected = card.classList.contains('selected');
+            
+            if (isSelected) {
+                card.classList.remove('selected');
+                checkbox.checked = false;
+            } else {
+                card.classList.add('selected');
+                checkbox.checked = true;
+            }
+            
+            toggleIncludeMaterial(idx, !isSelected);
+            updateSelectionInfo();
+        }
+
+        // Helper functions
+        function computeIsOpen(statusText, deadline) {
+            const now = Date.now();
+            const deadlineTs = deadline ? new Date(deadline).getTime() : null;
+            const statusNorm = statusText ? statusText.toLowerCase() : '';
+            const statusHintsOpen = /(afventer|open|aaben|aktiv)/.test(statusNorm);
+            const statusHintsClosed = /(afslut|luk)/.test(statusNorm);
+            
+            if (deadlineTs) {
+                if (deadlineTs >= now) return true;
+                if (deadlineTs < now && statusHintsClosed) return false;
+            }
+            if (statusHintsOpen) return true;
+            if (statusHintsClosed) return false;
+            return false;
+        }
+
+        function toggleIncludeResponse(id, checked) {
+            includeState.responses.set(id, !!checked);
+        }
+
+        function toggleIncludeAttachment(id, idx, checked) {
+            const arr = includeState.attachments.get(id) || [];
+            arr[idx] = !!checked;
+            includeState.attachments.set(id, arr);
+        }
+
+        function toggleIncludeMaterial(idx, checked) {
+            if (!lastFetched.materialInclude) lastFetched.materialInclude = [];
+            lastFetched.materialInclude[idx] = !!checked;
+            try {
+                if (lastFetched.hearing) {
+                    fetch(`/api/session/materials/${encodeURIComponent(lastFetched.hearing.id)}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ idx, included: !!checked })
+                    });
+                }
+            } catch {}
+        }
+
+        function openMaterial(idx) {
+            try {
+                const m = (lastFetched.materials||[])[idx];
+                if (!m) return;
+                const modal = document.getElementById('materialModal');
+                const title = document.getElementById('materialModalTitle');
+                const body = document.getElementById('materialModalBody');
+                if (title) title.textContent = m.title || 'Materiale';
+                if (body) body.textContent = m.content || '';
+                if (modal) {
+                    modal.classList.add('show');
+                    modal.setAttribute('aria-hidden', 'false');
+                }
+            } catch (_) {}
+        }
+
+        function closeMaterial() {
+            const modal = document.getElementById('materialModal');
+            if (modal) {
+                modal.classList.remove('show');
+                modal.setAttribute('aria-hidden', 'true');
+            }
+        }
+
+        // Wizard navigation
+        let currentStep = 1;
+        
+        function updateStepUi() {
+            const steps = [1, 2, 3];
+            steps.forEach(s => {
+                document.getElementById(`step-${s}`).style.display = (s === currentStep) ? 'block' : 'none';
+                const stepBtn = document.getElementById(`wizardStep${s}`);
+                if (stepBtn) {
+                    stepBtn.classList.toggle('active', s === currentStep);
+                    stepBtn.classList.toggle('completed', !!approvedSteps[s]);
+                }
+            });
+            
+            // Update action buttons
+            const prevBtn = document.getElementById('prevBtn');
+            const nextBtn = document.getElementById('nextBtn');
+            const downloadBtn = document.getElementById('downloadBtn');
+            
+            if (prevBtn) prevBtn.style.display = 'none';
+            if (nextBtn) nextBtn.style.display = 'none';
+            downloadBtn.style.display = currentStep === 3 && lastSummaries.length > 0 ? 'inline-flex' : 'none';
+            
+            // Update generate button state
+            const genBtn = document.getElementById('genBtn');
+            if (genBtn && currentStep === 3) {
+                genBtn.disabled = false;
+            }
+        }
+        
+        function goToStep(step) { 
+            currentStep = Math.max(1, Math.min(3, step)); 
+            updateStepUi(); 
+        }
+        
+        function nextStep() { 
+            goToStep(currentStep + 1); 
+        }
+        
+        function prevStep() { 
+            goToStep(currentStep - 1); 
+        }
+
+        function approveStep(step) {
+            if (step !== 1 && step !== 2) return;
+            approvedSteps[step] = true;
+            showSuccess(`Trin ${step} godkendt`);
+            updateStepUi();
+            if (step === 1) { goToStep(2); }
+            if (step === 2) { goToStep(3); }
+        }
+
+        function updateSelectionInfo() {
+            let responseCount = 0;
+            let attachmentCount = 0;
+            
+            includeState.responses.forEach((included, id) => {
+                if (included) responseCount++;
+            });
+            
+            includeState.attachments.forEach((attachments) => {
+                attachments.forEach(included => {
+                    if (included) attachmentCount++;
+                });
+            });
+            
+            const info = document.getElementById('selectionInfo');
+            if (info) {
+                info.textContent = `${responseCount} høringssvar valgt${attachmentCount > 0 ? ` • ${attachmentCount} bilag` : ''}`;
+            }
+        }
+        
+        function toggleAllResponses(checked) {
+            const checkboxes = document.querySelectorAll('input[id^="inc-"]');
+            checkboxes.forEach(cb => {
+                cb.checked = checked;
+                const id = parseInt(cb.id.replace('inc-', ''));
+                toggleIncludeResponse(id, checked);
+            });
+            updateSelectionInfo();
+        }
+
+        // Utility functions
+        // Modern notification system
+        function showNotification(message, type = 'info') {
+            const notification = document.createElement('div');
+            notification.className = `alert alert-${type === 'error' ? 'error' : 'success'} flex items-center gap-sm`;
+            notification.style.cssText = `
+                min-width: 300px;
+                margin-bottom: var(--space-sm);
+                animation: slideIn 0.3s ease-out;
+            `;
+            
+            const iconName = type === 'error' ? 'icon-warning' : type === 'success' ? 'icon-check' : 'icon-info';
+            notification.innerHTML = `
+                <svg class="icon">
+                    <use href="/icons.svg#${iconName}"></use>
+                </svg>
+                <span>${message}</span>
+            `;
+            
+            document.getElementById('notifications').appendChild(notification);
+            
+            setTimeout(() => {
+                notification.style.animation = 'slideOut 0.3s ease-in';
+                setTimeout(() => notification.remove(), 300);
+            }, 4000);
+        }
+        
+
+        
+        function showLoading(show) {
+            const overlay = document.getElementById('loadingOverlay');
+            if (show) {
+                overlay.classList.add('show');
+            } else {
+                overlay.classList.remove('show');
+            }
+        }
+
+        function showError(message) {
+            showNotification(message, 'error');
+        }
+
+        function showSuccess(message) {
+            showNotification(message, 'success');
+        }
+
+        // Safe encoding fixer for occasional mojibake in SSE messages (no exceptions)
+        function fixEncoding(text) {
+            if (typeof text !== 'string') return text;
+            try { text = text.replace(/\uFFFD/g, ''); } catch {}
+            try {
+                text = text
+                    .replace(/Ã¦/g, 'æ')
+                    .replace(/Ã¸/g, 'ø')
+                    .replace(/Ã¥/g, 'å')
+                    .replace(/Ã†/g, 'Æ')
+                    .replace(/Ã˜/g, 'Ø')
+                    .replace(/Ã…/g, 'Å')
+                    .replace(/â€“/g, '–')
+                    .replace(/â€”/g, '—')
+                    .replace(/â€™/g, "'")
+                    .replace(/â€œ/g, '“')
+                    .replace(/â€\x9d/g, '”')
+                    .replace(/â€³/g, '″')
+                    .replace(/â€/g, '”');
+            } catch {}
+            try { if (text.normalize) text = text.normalize('NFC'); } catch {}
+            return text;
+        }
+
+        // Placeholder functions for other features
+        function applySavedEdits() {
+            if (!lastFetched.hearing) return;
+            const map = loadEdits(lastFetched.hearing.id);
+            lastFetched.responses = lastFetched.responses.map(r => ({
+                ...r,
+                respondentType: (map[r.id]?.respondentType) || r.respondentType || 'Borger',
+                respondentName: (map[r.id]?.respondentName) || r.respondentName || 'Borger',
+                author: (map[r.id]?.author) ?? r.author ?? '',
+                organization: (map[r.id]?.organization) ?? r.organization ?? '',
+                onBehalfOf: (map[r.id]?.onBehalfOf) ?? r.onBehalfOf ?? '',
+                submittedAt: (map[r.id]?.submittedAt) ?? r.submittedAt ?? '',
+                text: (map[r.id]?.text) ?? r.text ?? '',
+                attachments: Array.isArray(map[r.id]?.attachments) ? map[r.id].attachments : (r.attachments || [])
+            }));
+            // default include all
+            includeState.responses.clear();
+            includeState.attachments.clear();
+            for (const r of lastFetched.responses) {
+                includeState.responses.set(r.id, true);
+                if (Array.isArray(r.attachments)) {
+                    includeState.attachments.set(r.id, r.attachments.map(() => true));
+                }
+            }
+        }
+
+        function updateRespondentName(responseId, value) {
+            if (!lastFetched.hearing) return;
+            saveEdit(lastFetched.hearing.id, responseId, { respondentName: value });
+        }
+
+        function updateRespondentType(responseId, value) {
+            if (!lastFetched.hearing) return;
+            if (!RESPONDENT_TYPES.includes(value)) return;
+            saveEdit(lastFetched.hearing.id, responseId, { respondentType: value });
+        }
+
+        async function autoClassifyRespondents() {
+            try {
+                const btn = document.getElementById('autoClassifyBtn');
+                if (btn) { btn.disabled = true; btn.classList.add('btn-loading'); }
+                const hearingId = getHearingIdFromUrl();
+                if (!hearingId) { showError('Intet hørings-ID'); return; }
+                showNotification('Analyserer høringssvar med AI…', 'info');
+                const resp = await fetch(`/api/auto-classify-respondents/${encodeURIComponent(hearingId)}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({})
+                });
+                const data = await resp.json().catch(()=>({ success: false }));
+                if (!data || !data.success) {
+                    showError((data && data.message) || 'Kunne ikke klassificere automatisk');
+                    return;
+                }
+                const suggestions = Array.isArray(data.suggestions) ? data.suggestions : [];
+                if (!suggestions.length) {
+                    showNotification('Ingen ændringer foreslået.', 'info');
+                    return;
+                }
+                // Apply to local edits store and UI inputs
+                let applied = 0;
+                const mapById = new Map(suggestions.map(s => [Number(s.id), s]));
+                if (lastFetched && Array.isArray(lastFetched.responses)) {
+                    for (const r of lastFetched.responses) {
+                        const sug = mapById.get(Number(r.id));
+                        if (!sug) continue;
+                        if (typeof sug.respondentName === 'string' && sug.respondentName.trim()) {
+                            updateRespondentName(r.id, sug.respondentName.trim());
+                            const input = document.getElementById(`rname-${r.id}`);
+                            if (input) input.value = sug.respondentName.trim();
+                        }
+                        if (typeof sug.respondentType === 'string' && RESPONDENT_TYPES.includes(sug.respondentType)) {
+                            updateRespondentType(r.id, sug.respondentType);
+                            const sel = document.getElementById(`rtype-${r.id}`);
+                            if (sel) sel.value = sug.respondentType;
+                        }
+                        applied += 1;
+                    }
+                }
+                if (applied > 0) {
+                    showSuccess(`Anvendte forslag for ${applied} svar`);
+                } else {
+                    showNotification('Ingen forslag passede på svarene.', 'info');
+                }
+            } catch (e) {
+                showError('Fejl ved automatisk udfyldning');
+            } finally {
+                const btn = document.getElementById('autoClassifyBtn');
+                if (btn) { btn.disabled = false; btn.classList.remove('btn-loading'); }
+            }
+        }
+
+        async function saveEdit(hearingId, responseId, edit) {
+            try {
+                await fetch(`/api/session/edits/${encodeURIComponent(hearingId)}` , {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ responseId, patch: edit })
+                });
+            } catch (_) {}
+        }
+
+        async function loadEdits(hearingId) {
+            try {
+                const r = await fetch(`/api/session/edits/${encodeURIComponent(hearingId)}`);
+                const j = await r.json();
+                return (j && j.success && j.edits) ? j.edits : {};
+            } catch { return {}; }
+        }
+
+        function handleUpload(ev) {
+            const f = ev.target.files && ev.target.files[0];
+            if (!f) return;
+            const fd = new FormData();
+            fd.append('file', f);
+            const hearingId = getHearingIdFromUrl();
+            fetch(`/api/upload?hearingId=${encodeURIComponent(hearingId)}`, { method: 'POST', body: fd })
+                .then(r => r.json())
+                .then(j => {
+                    if (!j.success) { 
+                        showError(j.message || 'Upload fejlede'); 
+                        return; 
+                    }
+                    lastFetched.uploads.push(j.file);
+                    const list = document.getElementById('uploadsList');
+                    const item = document.createElement('div');
+                    item.textContent = `Tilføjet: ${j.file.originalName}`;
+                    list.appendChild(item);
+                })
+                .catch(() => showError('Upload fejlede'));
+        }
+
+        async function buildSelectedMaterialsPayload() {
+            const materials = [];
+            try {
+                const flags = lastFetched.materialInclude || [];
+                for (let idx = 0; idx < (lastFetched.materials||[]).length; idx++) {
+                    const m = lastFetched.materials[idx];
+                    if (!flags[idx]) continue;
+                    if (m && m.url) {
+                        // Fast path: do not fetch remote content client-side; include as link
+                        materials.push({ kind: 'link', title: m.title || 'Dokument', url: m.url });
+                        continue;
+                    }
+                    if (m && m.type === 'description' && m.content) {
+                        materials.push({ kind: 'text', title: m.title || 'Høringstekst', content: m.content });
+                    }
+                }
+            } catch (_) {}
+            // Include uploads as links to avoid blocking before stream starts
+            try {
+                for (const up of (lastFetched.uploads||[])) {
+                    if (up && up.url) {
+                        materials.push({ kind: 'link', title: up.originalName || 'Upload', url: up.url });
+                    }
+                }
+            } catch (_) {}
+            return materials;
+        }
+
+        function generateSummaries() {
+            if (!lastFetched.hearing) { showError('Hent en høring først'); return; }
+            if (!(approvedSteps[1] && approvedSteps[2])) {
+                showError('Du kan først generere, når trin 1 og 2 er godkendt.');
+                return;
+            }
+            
+            // Hide progress UI entirely to keep variants up front
+            document.getElementById('genProgress').style.display = 'none';
+            window.__genTiming = { t0: performance.now(), connected: null, firstEvent: null, variants: {} };
+            window.__variantHasOwnStatus = {};
+            
+            // Abort/close any previous in-flight generation to avoid stale updates
+            try { window.__genAbortController && window.__genAbortController.abort(); } catch (_) {}
+            try { window.__genEventSource && window.__genEventSource.close(); } catch (_) {}
+            document.getElementById('genBtn').disabled = true;
+            try { document.getElementById('genBtn').style.display = 'none'; } catch {}
+            document.getElementById('summariesContainer').style.display = 'block';
+            document.getElementById('summariesContent').innerHTML = ''; // Clear previous
+            lastSummaries = [];
+            sseRetryAttempted = false;
+
+            // Immediately render placeholders for all variants so the user sees progress
+            try {
+                for (let i = 1; i <= 3; i++) {
+                    window.__variantHasOwnStatus[i] = false;
+                    ensureVariantPlaceholder(i);
+                    const s = document.getElementById(`summary-stream-${i}`);
+                    if (s) s.innerHTML = `
+                        <div class="thinking-ticker" aria-live="polite" aria-atomic="true">
+                            <span class="thinking-dot"></span>
+                            <span class="thinking-dot"></span>
+                            <span class="thinking-dot"></span>
+                            <span class="thinking-text">Modellen overvejer…</span>
+                        </div>`;
+                }
+            } catch (_) {}
+
+            // Use fetch-based SSE parsing with POST body (optimized path already implemented below)
+            startSummarizeViaFetch(lastFetched.hearing.id);
+        }
+
+        // Helper: set status text for a specific variant, ensuring ticker exists
+        function setVariantStatusText(id, message) {
+            if (!id) return;
+            let card = document.querySelector(`[data-variant-id="${id}"]`);
+            if (!card) { ensureVariantPlaceholder(id); card = document.querySelector(`[data-variant-id="${id}"]`); }
+            if (!card) return;
+            const el = card.querySelector('.summary-status');
+            if (!el) return;
+            let ticker = el.querySelector('.thinking-ticker');
+            if (!ticker) {
+                el.innerHTML = `
+                    <div class="thinking-ticker" aria-live="polite" aria-atomic="true">
+                        <span class="thinking-dot"></span>
+                        <span class="thinking-dot"></span>
+                        <span class="thinking-dot"></span>
+                        <span class="thinking-text"></span>
+                    </div>`;
+                ticker = el.querySelector('.thinking-ticker');
+            }
+            const textEl = ticker.querySelector('.thinking-text');
+            if (textEl && typeof message === 'string') textEl.textContent = message;
+            if (window.__variantHasOwnStatus && typeof id === 'number') window.__variantHasOwnStatus[id] = true;
+        }
+
+        // Helper: broadcast a global status to all variants that don't have their own yet
+        function broadcastGlobalStatus(message) {
+            if (!message) return;
+            for (let i = 1; i <= 3; i++) {
+                if (!window.__variantHasOwnStatus || window.__variantHasOwnStatus[i] !== true) {
+                    setVariantStatusText(i, message);
+                }
+            }
+        }
+
+        async function startSummarizeViaFetch(hearingId) {
+            const usp = new URLSearchParams(window.location.search);
+            const demoParam = usp.get('demo');
+            const bgParam = usp.get('bg');
+            const testParam = usp.get('test');
+            const demoPart = demoParam ? `&demo=${encodeURIComponent(demoParam)}` : '';
+            // Force direct streaming to minimize stalls; server has its own fallback
+            const bgPart = '&bg=0';
+            const testPart = testParam ? `&test=${encodeURIComponent(testParam)}` : '';
+            // Default to direct streaming (bg=0) unless explicitly overridden via URL param
+            const bgQuery = bgPart;
+            const url = `/api/summarize/${hearingId}?n=3&t=${Date.now()}${demoPart}${bgQuery}${testPart}`;
+            const progressEl = document.getElementById('genProgress2');
+            let fallbackTimer = null;
+            let controller = new AbortController();
+            window.__genAbortController = controller;
+            let gotAnyVariant = false;
+            function markActivity() {
+                gotAnyVariant = true;
+                if (fallbackTimer) { try { clearTimeout(fallbackTimer); } catch {} fallbackTimer = null; }
+            }
+            
+            // Avoid sending large bodies that freeze the UI; let server fetch data itself
+            // But include minimal respondent overrides from the wizard (name/type) so server uses edited values
+            const bodyData = {};
+            try {
+                if (lastFetched && lastFetched.hearing && typeof loadEdits === 'function') {
+                    const editsMap = loadEdits(lastFetched.hearing.id) || {};
+                    const overrides = {};
+                    const responses = Array.isArray(lastFetched.responses) ? lastFetched.responses : [];
+                    for (const r of responses) {
+                        const idStr = String(r.id);
+                        const isIncluded = includeState && includeState.responses ? (includeState.responses.get(r.id) !== false) : true;
+                        if (!isIncluded) continue;
+                        const saved = editsMap[idStr] || editsMap[r.id];
+                        const rnSaved = saved && typeof saved.respondentName === 'string' ? saved.respondentName.trim() : '';
+                        const rtSaved = saved && typeof saved.respondentType === 'string' ? saved.respondentType : null;
+                        let rnToSend = '';
+                        if (rnSaved) {
+                            rnToSend = rnSaved;
+                        } else if (typeof r.respondentName === 'string' && r.respondentName.trim() === 'Borger') {
+                            // Ensure defaults remain 'Borger' on the server side (avoid UUID substitution)
+                            rnToSend = 'Borger';
+                        }
+                        if (rnToSend || rtSaved) {
+                            overrides[idStr] = {};
+                            if (rnToSend) overrides[idStr].respondentName = rnToSend;
+                            if (rtSaved) overrides[idStr].respondentType = rtSaved;
+                        }
+                    }
+                    if (Object.keys(overrides).length) {
+                        bodyData.edits = overrides;
+                    }
+                }
+            } catch (_) {}
+            
+            try {
+                const resp = await fetch(url, { 
+                    method: 'POST', 
+                    headers: { 
+                        'Accept': 'text/event-stream',
+                        'Content-Type': 'application/json',
+                        'Cache-Control': 'no-cache'
+                    },
+                    cache: 'no-store',
+                    signal: controller.signal,
+                    body: JSON.stringify(bodyData)
+                });
+                if (!resp.ok || !resp.body) {
+                    showError(`Serverfejl ${resp.status || ''}. Prøv igen.`);
+                    document.getElementById('genProgress2').style.display = 'none';
+                    document.getElementById('genBtn').disabled = false;
+                    return;
+                }
+                const reader = resp.body.getReader();
+                const decoder = new TextDecoder('utf-8');
+                let buffer = '';
+                if (window.__genTiming && window.__genTiming.connected == null) {
+                    window.__genTiming.connected = performance.now();
+                    const dt = Math.round(window.__genTiming.connected - window.__genTiming.t0);
+                    if (progressEl) progressEl.textContent = `Forbundet til serveren (${dt} ms)…`;
+                }
+                // Fallback quickly if stuck at connecting: 6s (or 5s in demo)
+                const fallbackTimeoutMs = demoParam ? 5000 : 6000;
+                fallbackTimer = setTimeout(() => {
+                    if (!gotAnyVariant && !sseRetryAttempted) {
+                        try { controller.abort(); } catch {}
+                        sseRetryAttempted = true;
+                        // Switch to GET + EventSource fallback
+                        startSummarizeViaEventSource(hearingId);
+                    }
+                }, fallbackTimeoutMs);
+                function handleSseChunk(chunkText) {
+                    buffer += chunkText;
+                    let sepIdx;
+                    while ((sepIdx = buffer.indexOf('\n\n')) !== -1) {
+                        const raw = buffer.slice(0, sepIdx);
+                        buffer = buffer.slice(sepIdx + 2);
+                        let eventName = 'message';
+                        const dataLines = [];
+                        for (const line of raw.split('\n')) {
+                            const trimmed = line.trim();
+                            if (trimmed.startsWith('event:')) eventName = trimmed.slice(6).trim();
+                            else if (trimmed.startsWith('data:')) dataLines.push(trimmed.slice(5).trim());
+                        }
+                        const dataStr = dataLines.join('\n');
+                        if (!window.__genTiming.firstEvent) {
+                            window.__genTiming.firstEvent = performance.now();
+                            const dt2 = Math.round(window.__genTiming.firstEvent - window.__genTiming.t0);
+                            if (progressEl) progressEl.textContent = `Første data modtaget (${dt2} ms)…`;
+                        }
+                        if (eventName === 'info') {
+                            let obj = {};
+                            try { obj = JSON.parse(dataStr || '{}'); } catch (_) {}
+                            if (obj && typeof obj.message === 'string') {
+                                obj.message = fixEncoding(obj.message);
+                            }
+                            // Show server progress messages clearly
+                            if (progressEl) progressEl.textContent = (obj && obj.message) ? obj.message : '';
+                            // If info mentions a specific variant, reflect it in that card too; otherwise broadcast
+                            let vId = null;
+                            if (obj && obj.progress && Number.isFinite(obj.progress.variant)) vId = Number(obj.progress.variant);
+                            if (!vId && obj && typeof obj.message === 'string') {
+                                const m = obj.message.match(/variant\s+(\d+)/i);
+                                if (m) vId = Number(m[1]);
+                            }
+                            if (Number.isFinite(vId) && vId >= 1 && vId <= 3) {
+                                setVariantStatusText(vId, obj.message || '');
+                                // Do not mark activity for info; avoid cancelling fallback prematurely
+                            } else {
+                                // Do not treat generic info as activity; allow fallback to GET if no per-variant events arrive
+                            }
+                        } else if (eventName === 'placeholder') {
+                            let obj = {};
+                            try { obj = JSON.parse(dataStr || '{}'); } catch (_) {}
+                            if (obj && obj.id) {
+                                ensureVariantPlaceholder(obj.id);
+                                // Do not count placeholder alone as activity; wait for status/summary/content
+                                // initialize ticker if empty
+                                const s = document.getElementById(`summary-stream-${obj.id}`);
+                                if (s && !s.innerHTML.trim()) {
+                                    s.innerHTML = `
+                                        <div class="thinking-ticker" aria-live="polite" aria-atomic="true">
+                                            <span class="thinking-dot"></span>
+                                            <span class="thinking-dot"></span>
+                                            <span class="thinking-dot"></span>
+                                            <span class="thinking-text">Modellen overvejer…</span>
+                                        </div>`;
+                                }
+                            }
+                        } else if (eventName === 'summary') {
+                            let obj = {};
+                            try { obj = JSON.parse(dataStr || '{}'); } catch (_) {}
+                            if (obj && obj.id) {
+                                markActivity();
+                                updateVariantSummary(obj.id, obj.text || '');
+                            }
+                        } else if (eventName === 'headings') {
+                            // Ignore live headings to avoid flicker; render from final markdown on 'variant'
+                        } else if (eventName === 'content') {
+                            // Ignore live content to avoid flicker; just mark activity to keep connection alive
+                            markActivity();
+                        } else if (eventName === 'variant') {
+                            let obj = {};
+                            try { obj = JSON.parse(dataStr || '{}'); } catch (_) {}
+                            if (obj && obj.variant) {
+                                markActivity();
+                                // Remove thinking ticker for this variant (completed)
+                                const card = document.querySelector(`[data-variant-id="${obj.variant.id}"]`);
+                                if (card) {
+                                    const statusEl = card.querySelector('.summary-status');
+                                    const ticker = statusEl && statusEl.querySelector('.thinking-ticker');
+                                    if (ticker) ticker.remove();
+                                    // Ensure a single done indicator
+                                    const existingDone = statusEl && statusEl.querySelector('.text-success');
+                                    if (!existingDone) {
+                                        const doneEl = document.createElement('div');
+                                        doneEl.className = 'text-success';
+                                        doneEl.textContent = 'Færdig';
+                                        statusEl.appendChild(doneEl);
+                                    }
+                                    try { dedupeDoneIndicatorsForCard(card); } catch {}
+                                }
+                                // Persist markdown on the card for deterministic preview rendering
+                                try {
+                                    const v = obj.variant;
+                                    let c = document.querySelector(`[data-variant-id="${v.id}"]`);
+                                    if (!c) { ensureVariantPlaceholder(v.id); c = document.querySelector(`[data-variant-id="${v.id}"]`); }
+                                    if (c) {
+                                        let mdEl = c.querySelector('.variant-markdown');
+                                        if (!mdEl) {
+                                            mdEl = document.createElement('div');
+                                            mdEl.className = 'variant-markdown';
+                                            mdEl.style.display = 'none';
+                                            c.appendChild(mdEl);
+                                        }
+                                        mdEl.textContent = v.markdown || '';
+                                    }
+                                } catch {}
+                                lastSummaries.push(obj.variant);
+                                renderSummaryVariants(lastSummaries);
+                            }
+                        } else if (eventName === 'status') {
+                            let obj = {};
+                            try { obj = JSON.parse(dataStr || '{}'); } catch (_) {}
+                            if (obj && typeof obj.message === 'string') {
+                                obj.message = fixEncoding(obj.message);
+                            }
+                            // Do not abort on 'body' status; server continues with provided data anyway
+                            const card = obj && obj.id ? document.querySelector(`[data-variant-id="${obj.id}"]`) : null;
+                            if (card) {
+                                setVariantStatusText(obj.id, obj.message || `Status: ${obj.phase}`);
+                                const phase = String(obj.phase||'').toLowerCase();
+                                // Treat only meaningful phases as activity; exclude 'connecting', 'preparing', 'queued', 'polling'
+                                const isProgress = ['started','thinking','drafting','done','streaming','using-tools'].includes(phase);
+                                if (isProgress) markActivity();
+                            } else {
+                                const progressEl = document.getElementById('genProgress2');
+                                if (progressEl && obj && obj.message) progressEl.textContent = obj.message;
+                                const phase = String(obj && obj.phase || '').toLowerCase();
+                                if (phase !== 'openai' && obj && obj.message) {
+                                    broadcastGlobalStatus(obj.message);
+                                }
+                                // Do not treat global status as activity; fallback may still be needed
+                            }
+                        } else if (eventName === 'error') {
+                            let obj = {};
+                            try { obj = JSON.parse(dataStr || '{}'); } catch (_) {}
+                            const details = obj && obj.error ? ` (${obj.error})` : '';
+                            if (obj && obj.id) {
+                                // Show per-variant error inside the card to avoid hiding other parallel variants
+                                const card = document.querySelector(`[data-variant-id="${obj.id}"]`);
+                                if (card) {
+                                    const el = card.querySelector('.summary-status') || card.querySelector('.summary-preview');
+                                    if (el) {
+                                        const warn = document.createElement('div');
+                                        warn.className = 'text-error';
+                                        warn.textContent = ((obj && obj.message) || 'Fejl under generering.') + details;
+                                        el.parentNode.insertBefore(warn, el.nextSibling);
+                                    }
+                                }
+                            } else {
+                                showError(((obj && (obj.message)) || 'Fejl under generering.') + details);
+                            }
+                        } else if (eventName === 'end') {
+                            showSuccess('Færdig! Vælg den bedste opsummering og download som DOCX.');
+                            try { document.getElementById('genProgress').style.display = 'none'; } catch {}
+                            if (fallbackTimer) { clearTimeout(fallbackTimer); fallbackTimer = null; }
+                        }
+                    }
+                }
+                // Read stream
+                while (true) {
+                    const { value, done } = await reader.read();
+                    if (done) break;
+                    handleSseChunk(decoder.decode(value, { stream: true }));
+                }
+                document.getElementById('genBtn').disabled = false;
+            } catch (_) {
+                showError('Kunne ikke forbinde til opsummerings-tjenesten.');
+                document.getElementById('genBtn').disabled = false;
+            }
+        }
+
+        function startSummarizeViaEventSource(hearingId) {
+            try {
+                const usp = new URLSearchParams(window.location.search);
+                const bgParam = usp.get('bg');
+                const demoParam = usp.get('demo');
+                const delayParam = usp.get('delay');
+                const bgPart = bgParam ? `&bg=${encodeURIComponent(bgParam)}` : '';
+                const demoPart = demoParam ? `&demo=${encodeURIComponent(demoParam)}` : '';
+                const delayPart = delayParam ? `&delay=${encodeURIComponent(delayParam)}` : '';
+                // Prepare minimal respondent overrides for fallback GET as URL-encoded JSON
+                let editsPart = '';
+                try {
+                    if (lastFetched && lastFetched.hearing && typeof loadEdits === 'function') {
+                        const editsMap = loadEdits(lastFetched.hearing.id) || {};
+                        const overrides = {};
+                        const responses = Array.isArray(lastFetched.responses) ? lastFetched.responses : [];
+                        for (const r of responses) {
+                            const idStr = String(r.id);
+                            const isIncluded = includeState && includeState.responses ? (includeState.responses.get(r.id) !== false) : true;
+                            if (!isIncluded) continue;
+                            const saved = editsMap[idStr] || editsMap[r.id];
+                            const rnSaved = saved && typeof saved.respondentName === 'string' ? saved.respondentName.trim() : '';
+                            const rtSaved = saved && typeof saved.respondentType === 'string' ? saved.respondentType : null;
+                            let rnToSend = '';
+                            if (rnSaved) {
+                                rnToSend = rnSaved;
+                            } else if (typeof r.respondentName === 'string' && r.respondentName.trim() === 'Borger') {
+                                rnToSend = 'Borger';
+                            }
+                            if (rnToSend || rtSaved) {
+                                overrides[idStr] = {};
+                                if (rnToSend) overrides[idStr].respondentName = rnToSend;
+                                if (rtSaved) overrides[idStr].respondentType = rtSaved;
+                            }
+                        }
+                        if (Object.keys(overrides).length) {
+                            editsPart = `&edits=${encodeURIComponent(JSON.stringify(overrides))}`;
+                        }
+                    }
+                } catch (_) {}
+                // Force direct streaming (bg=0) for fallback to avoid background stream stalls
+                const url = `/api/summarize/${hearingId}?n=3&t=${Date.now()}&bg=0${demoPart}${delayPart}${editsPart}`;
+                const es = new EventSource(url);
+                window.__genEventSource = es;
+                const progressEl = document.getElementById('genProgress2');
+                es.addEventListener('open', () => {
+                    try {
+                        window.__genTiming = window.__genTiming || { t0: performance.now() };
+                        window.__genTiming.connected = performance.now();
+                        const dt = Math.round(window.__genTiming.connected - window.__genTiming.t0);
+                        if (progressEl) progressEl.textContent = `Forbundet til serveren (${dt} ms)…`;
+                    } catch {}
+                });
+                es.addEventListener('info', ev => {
+                    try {
+                        const obj = JSON.parse(ev.data||'{}');
+                        if (obj && typeof obj.message === 'string') {
+                            obj.message = fixEncoding(obj.message);
+                        }
+                        if (progressEl) progressEl.textContent = (obj && obj.message) ? obj.message : '';
+                        let vId = null;
+                        if (obj && obj.progress && Number.isFinite(obj.progress.variant)) vId = Number(obj.progress.variant);
+                        if (!vId && obj && typeof obj.message === 'string') {
+                            const m = obj.message.match(/variant\s+(\d+)/i);
+                            if (m) vId = Number(m[1]);
+                        }
+                        if (Number.isFinite(vId) && vId >= 1 && vId <= 3) {
+                            setVariantStatusText(vId, obj.message || '');
+                        } else {
+                            // Do not broadcast generic info messages to variant tickers
+                        }
+                    } catch {}
+                });
+                es.addEventListener('placeholder', ev => {
+                    try { const obj = JSON.parse(ev.data||'{}'); if (obj && obj.id) ensureVariantPlaceholder(obj.id); } catch {}
+                });
+                es.addEventListener('summary', ev => {
+                    // Ignore live summary to avoid flicker; render from final markdown on 'variant'
+                });
+                es.addEventListener('headings', ev => {
+                    // Ignore live headings to avoid flicker; render from final markdown on 'variant'
+                });
+                es.addEventListener('variant', ev => {
+                    try {
+                        const obj = JSON.parse(ev.data||'{}');
+                        if (obj && obj.variant) {
+                            // Remove thinking ticker for this variant (completed)
+                            const card = document.querySelector(`[data-variant-id="${obj.variant.id}"]`);
+                            if (card) {
+                                const statusEl = card.querySelector('.summary-status');
+                                const ticker = statusEl && statusEl.querySelector('.thinking-ticker');
+                                if (ticker) ticker.remove();
+                                const doneEl = document.createElement('div');
+                                doneEl.className = 'text-success';
+                                doneEl.textContent = 'Færdig';
+                                statusEl.appendChild(doneEl);
+                                try { dedupeDoneIndicatorsForCard(card); } catch {}
+                            }
+                            // Persist markdown for deterministic preview rendering
+                            try {
+                                const v = obj.variant;
+                                let c = document.querySelector(`[data-variant-id="${v.id}"]`);
+                                if (!c) { ensureVariantPlaceholder(v.id); c = document.querySelector(`[data-variant-id="${v.id}"]`); }
+                                if (c) {
+                                    let mdEl = c.querySelector('.variant-markdown');
+                                    if (!mdEl) {
+                                        mdEl = document.createElement('div');
+                                        mdEl.className = 'variant-markdown';
+                                        mdEl.style.display = 'none';
+                                        c.appendChild(mdEl);
+                                    }
+                                    mdEl.textContent = v.markdown || '';
+                                }
+                            } catch {}
+                            lastSummaries.push(obj.variant);
+                            renderSummaryVariants(lastSummaries);
+                        }
+                    } catch {}
+                });
+                es.addEventListener('status', ev => {
+                    try {
+                        const obj = JSON.parse(ev.data||'{}');
+                        // decode any mis-encoded utf-8 sequences from server
+                        if (obj && typeof obj.message === 'string') {
+                            obj.message = fixEncoding(obj.message);
+                        }
+                        const card = obj && obj.id ? document.querySelector(`[data-variant-id="${obj.id}"]`) : null;
+                        if (card) {
+                            const el = card.querySelector('.summary-status');
+                            if (el) {
+                                const msg = obj.message || '';
+                                let existing = el.querySelector('.thinking-ticker');
+                                if (!existing) {
+                                    el.innerHTML = `
+                                        <div class="thinking-ticker" aria-live="polite" aria-atomic="true">
+                                            <span class="thinking-dot"></span>
+                                            <span class="thinking-dot"></span>
+                                            <span class="thinking-dot"></span>
+                                            <span class="thinking-text"></span>
+                                        </div>`;
+                                    existing = el.querySelector('.thinking-ticker');
+                                }
+                                const textEl = existing.querySelector('.thinking-text');
+                                if (textEl) textEl.textContent = msg;
+                                if (window.__variantHasOwnStatus && Number.isFinite(obj.id)) window.__variantHasOwnStatus[obj.id] = true;
+                                // If variant marked done, stop its animation immediately
+                                if (String(obj.phase||'').toLowerCase() === 'done') {
+                                    const ticker = el.querySelector('.thinking-ticker');
+                                    if (ticker) ticker.remove();
+                                    try { const card = document.querySelector(`[data-variant-id="${obj.id}"]`); if (card) dedupeDoneIndicatorsForCard(card); } catch {}
+                                }
+                            }
+                        } else {
+                            // Avoid broadcasting OpenAI connection status to all variants
+                            const phase = String(obj && obj.phase || '').toLowerCase();
+                            if (phase !== 'openai' && obj && obj.message) {
+                                broadcastGlobalStatus(obj.message);
+                            }
+                        }
+                    } catch {}
+                });
+                es.addEventListener('error', ev => {
+                    try { const obj = JSON.parse(ev.data||'{}'); showError((obj && obj.message) || 'Fejl under generering.'); } catch { showError('Fejl under generering.'); }
+                });
+                es.addEventListener('end', () => {
+                    showSuccess('Færdig! Vælg den bedste opsummering og download som DOCX.');
+                    if (window.currentProgressInterval) { clearInterval(window.currentProgressInterval); }
+                    const progressBar = document.getElementById('progressBar');
+                    if (progressBar) progressBar.style.width = '100%';
+                    setTimeout(() => { document.getElementById('genProgress').style.display = 'none'; }, 500);
+                    try { es.close(); } catch {}
+                    try { if (window.__genEventSource === es) window.__genEventSource = null; } catch {}
+                });
+            } catch (_) {
+                showError('Kunne ikke oprette forbindelse (fallback).');
+            }
+        }
+
+        function renderSummaryVariants(variants) {
+            const container = document.getElementById('summariesContainer');
+            const content = document.getElementById('summariesContent');
+            if (!variants || variants.length === 0) { container.style.display = 'none'; return; }
+            
+            // Incrementally create/update cards to preserve live status (reasoning summary)
+            variants.forEach(v => {
+                let card = content.querySelector(`[data-variant-id="${v.id}"]`);
+                // Use final markdown only (no streaming snippets) for deterministic preview
+                if (!card) {
+                    // Create full card with a dedicated status line
+                    card = document.createElement('div');
+                    card.className = `summary-variant ${v.id === 1 ? 'selected' : ''}`;
+                    card.setAttribute('data-variant-id', String(v.id));
+                    card.innerHTML = `
+                        <div class="summary-variant-header">
+                            <input type="radio" name="summaryChoice" value="${v.id}" ${v.id===1?'checked':''}
+                                   class="summary-radio" onchange="selectSummaryVariant(${v.id})" />
+                            <h4 class="flex items-center gap-sm">
+                                <svg class="icon" style="color: var(--color-primary);">
+                                    <use href="/icons.svg#icon-ai"></use>
+                                </svg>
+                                Variant ${v.id}
+                            </h4>
+                        </div>
+                        <div class="summary-status" id="summary-stream-${v.id}" style="margin-bottom: var(--space-sm); color: var(--color-gray-600);"></div>
+                        <div class="summary-preview"></div>
+                        <div class="variant-markdown" style="display: none;"></div>
+                    `;
+                    content.appendChild(card);
+                }
+                // Update stored markdown for the card
+                const mdEl = card.querySelector('.variant-markdown');
+                if (mdEl && (v.markdown && v.markdown.length)) {
+                    mdEl.textContent = v.markdown;
+                }
+                // Render headings-only preview from final markdown to avoid flicker
+                try {
+                    const mdText = (mdEl && mdEl.textContent) || v.markdown || '';
+                    if (mdText) {
+                        renderHeadingPreviewFromMarkdown(v.id, mdText);
+                    }
+                } catch {}
+            });
+            
+            container.style.display = 'block';
+            document.getElementById('downloadBtn').style.display = 'inline-flex';
+        }
+        
+        function selectSummaryVariant(id) {
+            document.querySelectorAll('.summary-variant').forEach(el => {
+                el.classList.remove('selected');
+            });
+            document.querySelector(`[data-variant-id="${id}"]`).classList.add('selected');
+        }
+
+        function ensureVariantPlaceholder(id) {
+            const content = document.getElementById('summariesContent');
+            if (content.querySelector(`[data-variant-id="${id}"]`)) return;
+            const div = document.createElement('div');
+            div.className = `summary-variant ${id===1 ? 'selected' : ''}`;
+            div.setAttribute('data-variant-id', String(id));
+            div.innerHTML = `
+                <div class="summary-variant-header">
+                    <input type="radio" name="summaryChoice" value="${id}" ${id===1?'checked':''} class="summary-radio" onchange="selectSummaryVariant(${id})" />
+                    <h4 class="flex items-center gap-sm">
+                        <svg class="icon" style="color: var(--color-primary);">
+                            <use href="/icons.svg#icon-ai"></use>
+                        </svg>
+                        Variant ${id}
+                    </h4>
+                </div>
+                <div class="summary-status" id="summary-stream-${id}" style="margin-bottom: var(--space-sm); color: var(--color-gray-600);"></div>
+                <div class="summary-preview"></div>
+                <div class="variant-markdown" style="display: none;"></div>
+            `;
+            content.appendChild(div);
+            if (id === 1) {
+                const r = div.querySelector('input.summary-radio');
+                if (r) r.checked = true;
+            }
+        }
+
+        function updateVariantHeadings(id, items) {
+            const card = document.querySelector(`[data-variant-id="${id}"]`);
+            if (!card) return;
+            const previewEl = card.querySelector('.summary-preview');
+            if (!previewEl) return;
+            const clean = (items || []).map(h => stripCriticMarkup(String(h||'')));
+            // Render as hierarchy: we assume the list is in order and prefixed like "H1: Title", "H2: Title" or similar
+            const container = document.createElement('div');
+            container.className = 'heading-list';
+            clean.forEach(raw => {
+                const m = raw.match(/^\s*(H(\d))\s*[:.-]?\s*(.*)$/i);
+                const level = m ? parseInt(m[2], 10) : 2;
+                const title = m ? m[3] : raw;
+                const item = document.createElement('div');
+                item.className = `heading-item hlvl-${Math.min(Math.max(level,1),6)}`;
+                const span = document.createElement('span');
+                span.className = 'heading-title';
+                span.textContent = title;
+                item.appendChild(span);
+                container.appendChild(item);
+            });
+            previewEl.innerHTML = '';
+            previewEl.appendChild(container);
+        }
+
+        function updateVariantSummary(id, text) {
+            // This function is now deprecated in favor of `updateVariantHeadings` for live feedback
+        }
+
+        function escapeHtml(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+        function renderHeadingPreviewFromMarkdown(id, markdown) {
+            try {
+                const card = document.querySelector(`[data-variant-id="${id}"]`);
+                if (!card) return;
+                const previewEl = card.querySelector('.summary-preview');
+                if (!previewEl) return;
+                const lines = String(markdown||'').split(/\r?\n/);
+                const headings = [];
+                for (const line of lines) {
+                    const m = line.match(/^(#{1,6})\s+(.*)$/);
+                    if (m) {
+                        const lvl = Math.min(Math.max(m[1].length, 1), 6);
+                        let title = stripCriticMarkup(m[2] || '').trim();
+                        if (!title) continue;
+                        headings.push({ level: lvl, title });
+                    }
+                }
+                const container = document.createElement('div');
+                container.className = 'heading-list';
+                const stack = [{ level: 0, parent: container }];
+                for (const h of headings) {
+                    while (stack.length && h.level <= stack[stack.length - 1].level) {
+                        stack.pop();
+                    }
+                    const parent = stack[stack.length - 1].parent;
+                    const item = document.createElement('div');
+                    item.className = `heading-item hlvl-${h.level} expanded`;
+                    const titleEl = document.createElement('span');
+                    titleEl.className = 'heading-title';
+                    titleEl.textContent = h.title;
+                    const childrenEl = document.createElement('div');
+                    childrenEl.className = 'heading-children';
+                    item.appendChild(titleEl);
+                    item.appendChild(childrenEl);
+                    titleEl.addEventListener('click', (ev) => {
+                        try { ev.stopPropagation(); } catch {}
+                        item.classList.toggle('expanded');
+                    });
+                    parent.appendChild(item);
+                    stack.push({ level: h.level, parent: childrenEl });
+                }
+                previewEl.innerHTML = '';
+                previewEl.appendChild(container);
+            } catch {}
+        }
+
+        function dedupeDoneIndicatorsForCard(card) {
+            try {
+                const statusEl = card.querySelector('.summary-status');
+                if (!statusEl) return;
+                const doneEls = statusEl.querySelectorAll('.text-success');
+                if (doneEls.length > 1) {
+                    for (let i = 1; i < doneEls.length; i++) {
+                        doneEls[i].remove();
+                    }
+                }
+            } catch {}
+        }
+
+        function stripCriticMarkup(text) {
+            try {
+                let out = String(text || '');
+                // Balanced forms first
+                out = out
+                    // additions {+ +}
+                    .replace(/\{\+([\s\S]*?)\+\}/g, '$1')
+                    // deletions [- -]
+                    .replace(/\[-([\s\S]*?)-\]/g, '')
+                    // substitutions {~a~>b~} and {~a~}
+                    .replace(/\{~([\s\S]*?)~>\s*([\s\S]*?)~\}/g, '$2')
+                    .replace(/\{~([\s\S]*?)~\}/g, '$1')
+                    // comments {>> <<}
+                    .replace(/\{>>([\s\S]*?)<<\}/g, '')
+                    // highlights {== ==}
+                    .replace(/\{==([\s\S]*?)==\}/g, '$1')
+                    // notes {== ==}{>> <<}
+                    .replace(/\{==([\s\S]*?)==\}\{>>([\s\S]*?)<<\}/g, '$1')
+                    // equality {= =}
+                    .replace(/\{\=([\s\S]*?)\=\}/g, '$1');
+                // Fallback cleanup for unmatched opening tokens (e.g., headers with trailing {>>...)
+                out = out
+                    .replace(/\{>>.*$/g, '')
+                    .replace(/\{==.*$/g, '')
+                    .replace(/\{~.*$/g, '')
+                    .replace(/\{\+.*$/g, '')
+                    .replace(/\[-.*$/g, '');
+                return out;
+            } catch { return text; }
+        }
+
+        async function downloadSelectedDocx() {
+            const sel = document.querySelector('input[name="summaryChoice"]:checked');
+            if (!sel) { showError('Vælg en opsummeringsvariant'); return; }
+            const v = lastSummaries.find(x => String(x.id) === sel.value);
+            if (!v) { showError('Ugyldigt valg'); return; }
+            try {
+                const resp = await fetch('/api/build-docx', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ markdown: v.markdown, outFileName: `hoering_${lastFetched.hearing.id}_opsummering` })
+                });
+                if (!resp.ok) {
+                    const j = await resp.json().catch(()=>({}));
+                    showError(j.message || 'Fejl ved DOCX-generering');
+                    return;
+                }
+                const blob = await resp.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `hoering_${lastFetched.hearing.id}.docx`;
+                document.body.appendChild(a);
+                a.click();
+                URL.revokeObjectURL(url);
+                a.remove();
+            } catch (e) {
+                showError('Fejl ved download');
+            }
+        }
+
+        // Simple test harness: build a DOCX from the bundled scriptskabelon/testOutputLLM.md
+        async function testDocxBuilder() {
+            try {
+                const r = await fetch('/api/test-docx');
+                if (!r.ok) {
+                    const j = await r.json().catch(() => ({}));
+                    showError(j.message || 'Fejl ved test af DOCX-bygger');
+                    return;
+                }
+                const blob = await r.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'test_output.docx';
+                document.body.appendChild(a);
+                a.click();
+                URL.revokeObjectURL(url);
+                a.remove();
+                showSuccess('Test-DOCX genereret');
+            } catch (_) {
+                showError('Kunne ikke teste DOCX-bygger');
+            }
+        }
+
+        // Token usage UI removed to keep summary screen clean
+
+        function getMaterialMarkdown() {
+            let materialMarkdown = '';
+            if (Array.isArray(lastFetched.materials)) {
+                const flags = lastFetched.materialInclude || [];
+                lastFetched.materials.forEach((m, idx) => {
+                    if (!flags[idx]) return;
+                    if (m.type === 'description' && m.content) {
+                        materialMarkdown += `\n\n# ${m.title || 'Høringstekst'}\n\n${m.content}\n`;
+                    } else if (m.type === 'file') {
+                        materialMarkdown += `\n\n# ${m.title || 'Dokument'}\n\n[Indlejret dokument]\n`;
+                    }
+                });
+            }
+            return materialMarkdown;
+        }
+
+        function getResponsesMarkdown() {
+            const lines = ['# Samlede Høringssvar'];
+            for (const r of lastFetched.responses) {
+                if (!includeState.responses.get(r.id)) continue;
+                lines.push(`## Svar ${r.id}`);
+                const qaParts = [r.respondentName || 'Borger', r.respondentType || 'Borger'].filter(Boolean).join(' • ');
+                if (qaParts) lines.push(`- ${qaParts}`);
+                lines.push('');
+                lines.push(r.text || '');
+                // attachments are now consumed into materials payload; don't render here
+                lines.push('');
+            }
+            return lines.join('\n');
+        }
+    </script>
+</body>
+</html>

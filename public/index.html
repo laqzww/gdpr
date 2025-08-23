@@ -1,0 +1,943 @@
+<!DOCTYPE html>
+<html lang="da">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bliv Hørt AI</title>
+    <meta name="description" content="AI-drevet værktøj til at finde og opsummere høringer fra Københavns Kommune">
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <link rel="preload" as="image" href="/favicon.svg" />
+    <link rel="stylesheet" href="/global-styles.css">
+    <script src="/js/data-cache.js?v=2"></script>
+    <style>
+        /* Page-specific styles */
+        .hero-section {
+            background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-primary-light) 100%);
+            color: var(--color-white);
+            padding: var(--space-3xl) var(--space-xl);
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .hero-section::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            right: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%);
+            animation: float 20s ease-in-out infinite;
+        }
+        
+        @keyframes float {
+            0%, 100% { transform: translate(0, 0); }
+            50% { transform: translate(-50px, 50px); }
+        }
+        
+        .logo-container {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            background: var(--color-white);
+            width: 100px;
+            height: 100px;
+            border-radius: var(--radius-xl);
+            box-shadow: var(--shadow-xl);
+            margin-bottom: var(--space-xl);
+            position: relative;
+            z-index: 1;
+        }
+        
+        .search-section {
+            background: var(--color-white);
+            padding: var(--space-2xl);
+            margin-top: -40px;
+            position: relative;
+            z-index: 10;
+            border-radius: var(--radius-lg);
+            box-shadow: var(--shadow-xl);
+        }
+
+        .search-box {
+            max-width: 600px;
+            margin: 0 auto;
+            position: relative;
+        }
+        
+        .search-input-group {
+            position: relative;
+            display: flex;
+            align-items: center;
+        }
+        
+        .search-input-group .icon {
+            position: absolute;
+            left: var(--space-md);
+            color: var(--color-gray-400);
+            pointer-events: none;
+        }
+        
+        .search-input {
+            width: 100%;
+            padding: var(--space-md) var(--space-md) var(--space-md) calc(var(--space-xl) + 1.5rem);
+            font-size: var(--font-size-lg);
+            border: 2px solid var(--color-gray-300);
+            border-radius: var(--radius-full);
+            transition: all var(--transition-base);
+            background-color: var(--color-white);
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        }
+        
+        .search-input:focus {
+            border-color: var(--color-primary);
+            box-shadow: 0 0 0 4px rgba(231, 111, 81, 0.1);
+        }
+
+        .suggestions-dropdown {
+            position: absolute;
+            top: calc(100% + var(--space-sm));
+            left: 0;
+            right: 0;
+            background: var(--color-white);
+            border-radius: var(--radius-lg);
+            box-shadow: var(--shadow-xl);
+            max-height: 400px;
+            overflow-y: auto;
+            z-index: 100;
+            display: none;
+        }
+        
+        .suggestion-item {
+            padding: var(--space-md) var(--space-lg);
+            border-bottom: 1px solid var(--color-gray-100);
+            cursor: pointer;
+            transition: all var(--transition-fast);
+            display: flex;
+            align-items: flex-start;
+            gap: var(--space-md);
+        }
+        
+        .suggestion-item:hover {
+            background-color: var(--color-gray-100);
+        }
+        
+        .suggestion-item:last-child {
+            border-bottom: none;
+        }
+        
+        .suggestion-icon {
+            color: var(--color-primary);
+            flex-shrink: 0;
+            margin-top: 2px;
+        }
+
+        .suggestion-content {
+            flex: 1;
+        }
+        
+        .suggestion-title {
+            font-weight: 600;
+            color: var(--color-dark);
+            margin-bottom: var(--space-xs);
+        }
+        
+        .suggestion-meta {
+            font-size: var(--font-size-sm);
+            color: var(--color-gray-500);
+            display: flex;
+            align-items: center;
+            gap: var(--space-md);
+            flex-wrap: wrap;
+        }
+        
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: var(--space-xs);
+            padding: 2px var(--space-sm);
+            border-radius: var(--radius-full);
+            font-size: var(--font-size-xs);
+            font-weight: 500;
+        }
+        
+        .status-badge.active {
+            background-color: var(--color-gray-100);
+            color: var(--color-dark);
+            border: 1px solid var(--color-gray-300);
+        }
+        
+        .status-badge.closed {
+            background-color: var(--color-gray-200);
+            color: var(--color-gray-600);
+            border: 1px solid var(--color-gray-400);
+        }
+
+        .features-section {
+            padding: var(--space-3xl) var(--space-xl);
+            background: var(--color-gray-100);
+        }
+        
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: var(--space-xl);
+            max-width: 1000px;
+            margin: 0 auto;
+        }
+        
+        .feature-card {
+            background: var(--color-white);
+            padding: var(--space-xl);
+            border-radius: var(--radius-lg);
+            text-align: center;
+            transition: all var(--transition-base);
+        }
+        
+        .feature-card:hover {
+            transform: translateY(-4px);
+            box-shadow: var(--shadow-xl);
+        }
+        
+        .feature-icon {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 60px;
+            height: 60px;
+            background: rgba(231, 111, 81, 0.1);
+            color: var(--color-primary);
+            border-radius: var(--radius-lg);
+            margin-bottom: var(--space-md);
+        }
+
+        /* Modal styles */
+        .modal-backdrop {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+            backdrop-filter: blur(4px);
+        }
+        
+        .modal-backdrop.show {
+            display: block;
+        }
+        
+        .modal {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: var(--color-white);
+            border-radius: var(--radius-lg);
+            box-shadow: var(--shadow-xl);
+            max-width: 500px;
+            width: 90%;
+            max-height: 90vh;
+            overflow: hidden;
+            z-index: 1001;
+        }
+
+        .modal-header {
+            padding: var(--space-xl);
+            border-bottom: 1px solid var(--color-gray-200);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        
+        .modal-body {
+            padding: var(--space-xl);
+            max-height: 60vh;
+            overflow-y: auto;
+        }
+        
+        .modal-footer {
+            padding: var(--space-lg) var(--space-xl);
+            border-top: 1px solid var(--color-gray-200);
+            display: flex;
+            justify-content: flex-end;
+            gap: var(--space-md);
+        }
+
+        .hearing-details {
+            display: grid;
+            gap: var(--space-md);
+        }
+        
+        .detail-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: var(--space-sm) 0;
+            border-bottom: 1px solid var(--color-gray-100);
+        }
+        
+        .detail-row:last-child {
+            border-bottom: none;
+        }
+        
+        .detail-label {
+            font-weight: 500;
+            color: var(--color-gray-600);
+            display: flex;
+            align-items: center;
+            gap: var(--space-sm);
+        }
+        
+        .detail-value {
+            color: var(--color-dark);
+            text-align: right;
+        }
+
+        /* Loading overlay */
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(255, 255, 255, 0.95);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 2000;
+            display: none;
+        }
+        
+        .loading-overlay.show {
+            display: flex;
+        }
+        
+        .loading-content {
+            text-align: center;
+        }
+        
+        .loading-spinner {
+            width: 48px;
+            height: 48px;
+            border: 3px solid var(--color-gray-200);
+            border-top-color: var(--color-primary);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin: 0 auto var(--space-md);
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+        
+        @keyframes slideOut {
+            from { transform: translateX(0); opacity: 1; }
+            to { transform: translateX(100%); opacity: 0; }
+        }
+        
+        /* Responsive design */
+
+        @media (max-width: 768px) {
+            .hero-section {
+                padding: var(--space-2xl) var(--space-md);
+            }
+            
+            .logo-container {
+                width: 80px;
+                height: 80px;
+            }
+            
+            .features-grid {
+                grid-template-columns: 1fr;
+                gap: var(--space-md);
+            }
+            
+            .modal {
+                width: 95%;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- SVG Icon Sprite -->
+    <object data="/icons.svg" type="image/svg+xml" style="display: none;"></object>
+    
+    <!-- Hero Section -->
+    <section class="hero-section">
+        <div class="container">
+            <div class="logo-container">
+                <img src="/favicon.svg" alt="Bliv Hørt AI Logo" style="width: 80%; height: 80%;">
+            </div>
+            <h1 style="font-size: var(--font-size-4xl); font-weight: 700; margin-bottom: var(--space-md); position: relative; z-index: 1;">
+                Bliv Hørt AI
+            </h1>
+            <p style="font-size: var(--font-size-xl); opacity: 0.95; max-width: 600px; margin: 0 auto; position: relative; z-index: 1;">
+                Opsummér høringer
+            </p>
+        </div>
+    </section>
+    
+    <!-- Search Section -->
+    <section class="search-section container">
+        <div class="search-box">
+            <div class="search-input-group">
+                <svg class="icon icon-lg" style="color: var(--color-gray-400);">
+                    <use href="/icons.svg#icon-search"></use>
+                </svg>
+                <input 
+                    type="text" 
+                    id="search" 
+                    class="search-input" 
+                    placeholder="Søg høring..." 
+                    oninput="onSearchInput()" 
+                    autocomplete="off"
+                    aria-label="Søg efter høring"
+                >
+            </div>
+            <div id="suggestions" class="suggestions-dropdown"></div>
+            
+            <p class="text-center mt-md" style="color: var(--color-gray-500); font-size: var(--font-size-sm);">
+                Indtast titel på høring
+            </p>
+        </div>
+    </section>
+    
+
+    
+    <!-- Loading Overlay -->
+    <div id="loadingOverlay" class="loading-overlay">
+        <div class="loading-content">
+            <div class="loading-spinner"></div>
+            <p style="color: var(--color-gray-600); margin-top: var(--space-md); text-align: center;">Henter høringsdata...</p>
+        </div>
+    </div>
+    
+    <!-- Notifications -->
+    <div id="notifications" style="position: fixed; top: var(--space-md); right: var(--space-md); z-index: 3000;"></div>
+
+    
+    <!-- Hearing Selection Modal -->
+    <div id="hearingModal" class="modal-backdrop">
+        <div class="modal">
+            <div class="modal-header">
+                <h2 style="font-size: var(--font-size-2xl); margin: 0;">Bekræft valg</h2>
+                <button class="btn btn-icon btn-ghost" onclick="closeHearingModal()" aria-label="Luk">
+                    <svg class="icon">
+                        <use href="/icons.svg#icon-close"></use>
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div id="modalHearingDetails" class="hearing-details">
+                    <!-- Hearing details will be populated here -->
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeHearingModal()">
+                    <svg class="icon">
+                        <use href="/icons.svg#icon-close"></use>
+                    </svg>
+                    Annuller
+                </button>
+                <button class="btn btn-primary" onclick="proceedWithHearing()">
+                    <svg class="icon">
+                        <use href="/icons.svg#icon-arrow-right"></use>
+                    </svg>
+                    Start opsummering
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // State for hearing selection
+        let selectedHearingForModal = null;
+
+        // Modern notification system
+        function showNotification(message, type = 'info') {
+            const notification = document.createElement('div');
+            notification.className = `alert alert-${type === 'error' ? 'error' : 'success'} flex items-center gap-sm`;
+            notification.style.cssText = `
+                min-width: 300px;
+                margin-bottom: var(--space-sm);
+                animation: slideIn 0.3s ease-out;
+            `;
+            
+            const iconName = type === 'error' ? 'icon-warning' : type === 'success' ? 'icon-check' : 'icon-info';
+            notification.innerHTML = `
+                <svg class="icon">
+                    <use href="/icons.svg#${iconName}"></use>
+                </svg>
+                <span>${message}</span>
+            `;
+            
+            document.getElementById('notifications').appendChild(notification);
+            
+            setTimeout(() => {
+                notification.style.animation = 'slideOut 0.3s ease-in';
+                setTimeout(() => notification.remove(), 300);
+            }, 4000);
+        }
+        
+        async function fetchHearingDataById(hearingId) {
+            // Direct navigation to work page with the hearing ID
+            window.location.href = `/work.html?id=${hearingId}`;
+        }
+
+
+
+        let searchTimeout;
+        let cachedSearchIndex = null;
+        let lastIndexFetch = 0;
+        const INDEX_CACHE_TIME = 5 * 60 * 1000; // 5 minutes
+        let currentSearchToken = 0;
+        let activeSearchController = null;
+        let lastSuggestionsKey = '';
+        
+        async function loadSearchIndex() {
+            // Try cache first
+            if (window.dataCache) {
+                const cached = await window.dataCache.getSearchIndex();
+                if (cached) {
+                    cachedSearchIndex = cached;
+                    lastIndexFetch = Date.now();
+                    return cached;
+                }
+            }
+            
+            // Load from server
+            try {
+                const response = await fetch('/api/hearings');
+                const data = await response.json();
+                if (data.success) {
+                    cachedSearchIndex = data.hearings;
+                    lastIndexFetch = Date.now();
+                    // Save to cache
+                    if (window.dataCache) {
+                        await window.dataCache.setSearchIndex(data.hearings);
+                    }
+                    return data.hearings;
+                }
+            } catch (error) {
+                console.error('Failed to load search index:', error);
+            }
+            return [];
+        }
+        
+        async function searchLocally(query) {
+            // Ensure we have search index
+            if (!cachedSearchIndex || Date.now() - lastIndexFetch > INDEX_CACHE_TIME) {
+                await loadSearchIndex();
+            }
+            
+            if (!cachedSearchIndex) return [];
+            
+            const q = query.toLowerCase();
+            const isNumeric = /^\d+$/.test(query);
+            
+            return cachedSearchIndex
+                .filter(h => {
+                    if (isNumeric) {
+                        return String(h.id).includes(query);
+                    }
+                    const title = (h.title || '').toLowerCase();
+                    return title.includes(q) || String(h.id).includes(query);
+                })
+                .slice(0, 20);
+        }
+        
+        function sortSuggestionsForQuery(suggestions, query) {
+            const isNumeric = /^\d+$/.test(query);
+            if (!isNumeric) return suggestions;
+            const exact = [], starts = [], contains = [], others = [];
+            for (const item of suggestions) {
+                const idStr = String(item.id || '');
+                if (idStr === query) exact.push(item);
+                else if (idStr.startsWith(query)) starts.push(item);
+                else if (idStr.includes(query)) contains.push(item);
+                else others.push(item);
+            }
+            return [].concat(exact, starts, contains, others);
+        }
+        
+        async function onSearchInput() {
+            clearTimeout(searchTimeout);
+            const query = document.getElementById('search').value.trim();
+            
+            if (query.length < 2) {
+                hideSuggestions();
+                if (activeSearchController && activeSearchController.abort) {
+                    try { activeSearchController.abort(); } catch {}
+                    activeSearchController = null;
+                }
+                return;
+            }
+            
+            searchTimeout = setTimeout(async () => {
+                const token = ++currentSearchToken;
+                try {
+                    // Drop if user changed value since scheduling
+                    const latest = document.getElementById('search').value.trim();
+                    if (latest !== query) return;
+
+                    // Local suggestions first
+                    const localResults = await searchLocally(query);
+                    if (localResults.length > 0) {
+                        displaySuggestions(localResults);
+                    }
+
+                    // If numeric and we already have an exact ID match locally, avoid second load
+                    const isNumeric = /^\d+$/.test(query);
+                    if (isNumeric && localResults.some(h => String(h.id) === query)) {
+                        if (activeSearchController && activeSearchController.abort) {
+                            try { activeSearchController.abort(); } catch {}
+                            activeSearchController = null;
+                        }
+                        return;
+                    }
+
+                    // Abort previous request and fetch remote
+                    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+                    if (activeSearchController && activeSearchController.abort) {
+                        try { activeSearchController.abort(); } catch {}
+                    }
+                    activeSearchController = controller;
+
+                    const response = await fetch(`/api/search?q=${encodeURIComponent(query)}`, controller ? { signal: controller.signal } : {});
+                    const data = await response.json();
+
+                    // Only update if this response is still current
+                    if (token !== currentSearchToken) return;
+                    const nowVal = document.getElementById('search').value.trim();
+                    if (nowVal !== query) return;
+
+                    if (data && data.success) {
+                        displaySuggestions(data.suggestions);
+                    }
+                } catch (error) {
+                    if (error && error.name === 'AbortError') return;
+                    console.error('Search error:', error);
+                }
+            }, 100); // Reduced delay for faster response
+        }
+        
+        function displaySuggestions(suggestions) {
+            const suggestionsDiv = document.getElementById('suggestions');
+            
+            if (suggestions.length === 0) {
+                hideSuggestions();
+                return;
+            }
+            
+            const inputEl = document.getElementById('search');
+            const currentQuery = inputEl ? inputEl.value.trim() : '';
+            const sorted = sortSuggestionsForQuery(suggestions, currentQuery);
+
+            // Dedupe UI updates: avoid re-rendering identical lists
+            const newKey = sorted.map(h => `${h.id}:${(h.title||'').trim()}`).join('|');
+            if (newKey === lastSuggestionsKey) {
+                return;
+            }
+            lastSuggestionsKey = newKey;
+
+            suggestionsDiv.innerHTML = sorted.map(h => {
+                const safeTitle = (h.title && String(h.title).trim()) ? h.title : `Høring ${h.id}`;
+                const isActive = computeIsOpen(h.status, h.deadline);
+                
+                return `
+                <div class="suggestion-item" data-id="${h.id}" data-deadline="${h.deadline || ''}" data-status="${h.status || ''}" onclick="selectHearing('${h.id}')" onmouseover="preloadHearing('${h.id}')">
+                    <svg class="icon suggestion-icon">
+                        <use href="/icons.svg#icon-document"></use>
+                    </svg>
+                    <div class="suggestion-content">
+                        <div class="suggestion-title">${safeTitle}</div>
+                        <div class="suggestion-meta">
+                            <span class="status-badge ${isActive ? 'active' : 'closed'}">
+                                ${h.status || 'Ukendt'}
+                            </span>
+                            <span style="display: flex; align-items: center; gap: var(--space-xs);">
+                                <svg class="icon icon-sm" style="color: var(--color-gray-400);">
+                                    <use href="/icons.svg#icon-calendar"></use>
+                                </svg>
+                                ${h.deadline ? new Date(h.deadline).toLocaleDateString('da-DK', { day: '2-digit', month: 'short', year: 'numeric' }) : 'Ingen frist'}
+                            </span>
+                            <span>ID: ${h.id}</span>
+                        </div>
+                    </div>
+                </div>
+            `;}).join('');
+            
+            suggestionsDiv.style.display = 'block';
+            
+            // Preload top suggestions in background
+            setTimeout(() => {
+                sorted.slice(0, 5).forEach((h, index) => {
+                    setTimeout(() => preloadHearing(h.id), index * 200);
+                });
+            }, 100);
+        }
+        
+        function hideSuggestions() {
+            document.getElementById('suggestions').style.display = 'none';
+            lastSuggestionsKey = '';
+        }
+        
+        function selectHearing(hearingId) {
+            // Get the hearing data from the current search results
+            const suggestionsDiv = document.getElementById('suggestions');
+            const suggestionItems = suggestionsDiv.querySelectorAll('.suggestion-item');
+            
+            // Find the clicked hearing by matching the data-id attribute
+            let selectedHearing = null;
+            for (let item of suggestionItems) {
+                const idAttr = item.getAttribute('data-id');
+                if (idAttr === String(hearingId)) {
+                    const title = item.querySelector('.suggestion-title').textContent;
+                    const status = item.getAttribute('data-status') || 'ukendt';
+                    const deadlineIso = item.getAttribute('data-deadline') || null;
+                    selectedHearing = {
+                        id: hearingId,
+                        title,
+                        status,
+                        deadlineIso
+                    };
+                    break;
+                }
+            }
+            
+            // Hide suggestions and clear search
+            hideSuggestions();
+            document.getElementById('search').value = '';
+            
+            if (selectedHearing) {
+                showHearingModal(selectedHearing);
+            } else {
+                // Fallback: direct navigation
+                fetchHearingDataById(hearingId);
+            }
+        }
+        
+        function showHearingModal(hearing) {
+            selectedHearingForModal = hearing;
+            const detailsDiv = document.getElementById('modalHearingDetails');
+            
+            const deadlineIso = hearing.deadlineIso || null;
+            const deadlineText = deadlineIso ? new Date(deadlineIso).toLocaleDateString('da-DK', { day: '2-digit', month: 'long', year: 'numeric' }) : 'Ikke angivet';
+            const statusText = hearing.status || 'Ikke angivet';
+            const isOpen = computeIsOpen(statusText, deadlineIso);
+            
+            detailsDiv.innerHTML = `
+                <div class="detail-row">
+                    <span class="detail-label">
+                        <svg class="icon icon-sm">
+                            <use href="/icons.svg#icon-document"></use>
+                        </svg>
+                        Titel
+                    </span>
+                    <span class="detail-value">${hearing.title}</span>
+                </div>
+                <div class="detail-row">
+                    <span class="detail-label">
+                        <svg class="icon icon-sm">
+                            <use href="/icons.svg#icon-${isOpen ? 'check' : 'warning'}"></use>
+                        </svg>
+                        Status
+                    </span>
+                    <span class="detail-value">
+                        <span class="status-badge ${isOpen ? 'active' : 'closed'}">
+                            ${statusText}
+                        </span>
+                    </span>
+                </div>
+                <div class="detail-row">
+                    <span class="detail-label">
+                        <svg class="icon icon-sm">
+                            <use href="/icons.svg#icon-calendar"></use>
+                        </svg>
+                        Frist
+                    </span>
+                    <span class="detail-value">${deadlineText}</span>
+                </div>
+            `;
+            
+            document.getElementById('hearingModal').classList.add('show');
+            document.body.style.overflow = 'hidden';
+        }
+        
+        function closeHearingModal() {
+            document.getElementById('hearingModal').classList.remove('show');
+            document.body.style.overflow = '';
+            selectedHearingForModal = null;
+        }
+        
+        function proceedWithHearing() {
+            if (selectedHearingForModal) {
+                const hearingId = selectedHearingForModal.id;
+                closeHearingModal();
+                showLoading(true);
+                // Redirect to work page with hearing ID
+                window.location.href = `/work.html?id=${hearingId}`;
+            }
+        }
+
+        // Helper function to determine if hearing is open
+        function computeIsOpen(statusText, deadline) {
+            const now = Date.now();
+            const deadlineTs = deadline ? new Date(deadline).getTime() : null;
+            const statusNorm = statusText ? statusText.toLowerCase() : '';
+            const statusHintsOpen = /(afventer|open|aaben|aktiv)/.test(statusNorm);
+            const statusHintsClosed = /(afslut|luk)/.test(statusNorm);
+            
+            if (deadlineTs) {
+                if (deadlineTs >= now) return true;
+                if (deadlineTs < now && statusHintsClosed) return false;
+            }
+            if (statusHintsOpen) return true;
+            if (statusHintsClosed) return false;
+            return false;
+        }
+
+
+
+
+
+
+
+
+        // Register service worker
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('/service-worker.js')
+                .then(registration => console.log('Service Worker registered'))
+                .catch(error => console.log('Service Worker registration failed:', error));
+        }
+        
+        // Initialize page
+        document.addEventListener('DOMContentLoaded', async function() {
+            // Initialize data cache
+            if (window.dataCache) {
+                await window.dataCache.init();
+                // Preload search index
+                loadSearchIndex();
+            }
+            
+            // Deep link support: ?id=123
+            const params = new URLSearchParams(window.location.search);
+            const id = params.get('id');
+            if (id) {
+                fetchHearingDataById(id);
+            }
+            
+            // Focus search input
+            document.getElementById('search').focus();
+        });
+        
+        // Hide suggestions when clicking outside
+        document.addEventListener('click', function(e) {
+            const searchBox = document.querySelector('.search-box');
+            if (searchBox && !searchBox.contains(e.target)) {
+                hideSuggestions();
+            }
+        });
+
+        // Close modal when clicking outside
+        document.addEventListener('click', function(e) {
+            const modalBackdrop = document.getElementById('hearingModal');
+            if (modalBackdrop && modalBackdrop.classList.contains('show') && e.target === modalBackdrop) {
+                closeHearingModal();
+            }
+        });
+
+        function showLoading(show) {
+            const overlay = document.getElementById('loadingOverlay');
+            if (show) {
+                overlay.classList.add('show');
+            } else {
+                overlay.classList.remove('show');
+            }
+        }
+
+        function showError(message) {
+            showNotification(message, 'error');
+        }
+
+        function showSuccess(message) {
+            showNotification(message, 'success');
+        }
+        
+        // Preload hearing data when user hovers or when showing suggestions
+        const preloadedHearings = new Set();
+        let preloadQueue = [];
+        let isPreloading = false;
+        
+        async function preloadHearing(hearingId) {
+            if (!window.dataCache || preloadedHearings.has(hearingId)) return;
+            
+            // Add to queue
+            if (!preloadQueue.includes(hearingId)) {
+                preloadQueue.push(hearingId);
+            }
+            
+            // Process queue
+            if (!isPreloading) {
+                processPreloadQueue();
+            }
+        }
+        
+        async function processPreloadQueue() {
+            if (isPreloading || preloadQueue.length === 0) return;
+            
+            isPreloading = true;
+            
+            while (preloadQueue.length > 0) {
+                const hearingId = preloadQueue.shift();
+                if (preloadedHearings.has(hearingId)) continue;
+                
+                try {
+                    preloadedHearings.add(hearingId);
+                    await window.dataCache.preloadHearing(hearingId);
+                    // Also preload materials with slight delay
+                    setTimeout(() => {
+                        window.dataCache.preloadMaterials(hearingId).catch(() => {});
+                    }, 500);
+                } catch (error) {
+                    console.warn('Failed to preload hearing', hearingId, error);
+                    preloadedHearings.delete(hearingId);
+                }
+                
+                // Small delay between preloads to avoid overwhelming server
+                await new Promise(resolve => setTimeout(resolve, 100));
+            }
+            
+            isPreloading = false;
+        }
+
+
+
+
+        // Allow Enter key to trigger direct hearing fetch if it's a number
+        (function(){
+            const searchInput = document.getElementById('search');
+            if (searchInput) {
+                searchInput.addEventListener('keypress', function(e) {
+                    if (e.key === 'Enter') {
+                        const query = searchInput.value.trim();
+                        if (/^\d+$/.test(query)) {
+                            hideSuggestions();
+                            searchInput.value = '';
+                            fetchHearingDataById(parseInt(query));
+                        }
+                    }
+                });
+            }
+        })();
+    </script>
+</body>
+</html>

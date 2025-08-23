@@ -1,0 +1,9 @@
+# Python dependencies for the fetcher application
+
+# For DOCX generation with CriticMarkup support
+python-docx>=1.2.0
+# Explicit runtime dependencies for python-docx used by server DOCX read/write
+lxml>=4.9.0
+Pillow>=8.4.0
+
+# Other dependencies (add as needed)

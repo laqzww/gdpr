@@ -1,0 +1,28 @@
+# Node
+node_modules/
+*.log
+*.out
+*.gz
+
+# Env
+.env
+.env.*
+
+# Data
+data/
+uploads/
+tmp/
+server.log
+server.out
+hearings-cache.json
+
+# SQLite
+**/*.sqlite
+**/*.db
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Allow example env
+\!.env.example
