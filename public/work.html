@@ -1582,6 +1582,10 @@
                     showError(msg);
                     return;
                 }
+                if (data.queued) {
+                    showNotification('Data for høringen var ikke klar – den er sat i baggrundskø. Prøv igen om lidt.', 'info');
+                    return;
+                }
                 const suggestions = Array.isArray(data.suggestions) ? data.suggestions : [];
                 if (!suggestions.length) {
                     showNotification('Ingen ændringer foreslået.', 'info');

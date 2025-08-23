@@ -2527,18 +2527,32 @@ app.post('/api/auto-classify-respondents/:id', express.json({ limit: '1mb' }), a
             return res.status(400).json({ success: false, message: 'OPENAI_API_KEY mangler – kan ikke klassificere automatisk.' });
         }
 
-        // Fetch current hearing data (meta + responses) via our own API for consistency
-        // Use absolute origin to avoid localhost when running behind a proxy (e.g., Render)
-        const base = (process.env.PUBLIC_URL || '').trim() || `http://localhost:${PORT}`;
-        // Shorter timeout for this lightweight fetch to avoid long hangs surfacing as generic NS_ERROR_FAILURE on client
-        const agg = await axios.get(`${base}/api/hearing/${encodeURIComponent(hearingId)}?persist=1`, { validateStatus: () => true, timeout: CLASSIFY_INTERNAL_TIMEOUT_MS }).catch(err => ({ data: null, err }));
-        if (!agg || !agg.data) {
-            return res.status(504).json({ success: false, message: 'Tidsudløb ved hentning af data til klassificering' });
+        // Fetch current hearing data (meta + responses) with a fast, local-first strategy to avoid long hangs
+        let responses = [];
+        try {
+            const fromDb = readAggregate(hearingId);
+            if (fromDb && Array.isArray(fromDb.responses) && fromDb.responses.length) {
+                responses = fromDb.responses;
+            }
+        } catch {}
+        if (!responses.length) {
+            try {
+                const meta = readPersistedHearingWithMeta(hearingId);
+                const persisted = meta?.data;
+                if (persisted && persisted.success && Array.isArray(persisted.responses) && !isPersistStale(meta)) {
+                    responses = persisted.responses;
+                }
+            } catch {}
         }
-        if (!agg.data?.success) {
-            return res.status(500).json({ success: false, message: 'Kunne ikke hente høringsdata' });
+        if (!responses.length) {
+            // If no local/persist data, trigger a background prefetch and return quickly to avoid client-side NS_ERROR_FAILURE
+            try {
+                const base = (process.env.PUBLIC_URL || '').trim() || `http://localhost:${PORT}`;
+                // Fire-and-forget prefetch
+                axios.post(`${base}/api/prefetch/${encodeURIComponent(hearingId)}`, {}, { validateStatus: () => true, timeout: 10000 }).catch(() => {});
+            } catch {}
+            return res.status(202).json({ success: true, suggestions: [], queued: true, message: 'Data for høringen er ikke klar endnu. Forvarmer i baggrunden – prøv igen om lidt.' });
         }
-        const responses = Array.isArray(agg.data.responses) ? agg.data.responses : [];
         if (!responses.length) {
             return res.json({ success: true, suggestions: [] });
         }
