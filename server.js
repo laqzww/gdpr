@@ -2691,7 +2691,10 @@ app.get('/api/summarize/:id', async (req, res) => {
 
     try {
         // In background mode, proxy via job + polling over SSE (no direct OpenAI streaming)
-        if (BACKGROUND_MODE) {
+        // Respect explicit bg=0 to force direct streaming and avoid DB inserts
+        const bgParam = String(req.query.bg || '').trim().toLowerCase();
+        const forceDirect = bgParam === '0' || bgParam === 'false' || bgParam === 'no';
+        if (BACKGROUND_MODE && !forceDirect) {
             await legacySummarizeAsJobSse(req, res, null);
             return;
         }
@@ -3249,7 +3252,10 @@ app.post('/api/summarize/:id', express.text({ type: 'application/json', limit: '
                 const hearingId = String(req.params.id).trim();
 
                 // In background mode, immediately create job and poll over SSE; accept optional body
-                if (BACKGROUND_MODE) {
+                // Respect explicit bg=0 to force direct streaming and avoid DB inserts
+                const bgParam2 = String(req.query.bg || '').trim().toLowerCase();
+                const forceDirect2 = bgParam2 === '0' || bgParam2 === 'false' || bgParam2 === 'no';
+                if (BACKGROUND_MODE && !forceDirect2) {
                     await legacySummarizeAsJobSse(req, res, {
                         hearing: parsedBody && parsedBody.hearing,
                         responses: parsedBody && parsedBody.responses,

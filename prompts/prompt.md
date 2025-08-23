@@ -149,10 +149,10 @@ Denne sektion er sekundær til opsummeringen og skal holdes kort. Den dokumenter
 #### Format 
 
 ```markdown 
-**Overvejelser om opsummmeringen** 
-*Grupperingsstrategi og -overvejelser* 
+**Overvejelser om opsummmeringen**
+*Grupperingsstrategi og -overvejelser* \n
 [Her redegøres **kun** for de mest centrale og **uundgåelige analytiske dilemmaer**. Forklar kort, hvorfor markant forskellige argumenter alligevel blev samlet i én gruppe (f.eks. fordi de delte det samme overordnede formål, selvom begrundelserne var vidt forskellige), eller hvorfor et tvetydigt argument blev placeret i ét tema frem for et andet.] 
-*Væsentlige nuancer og udeladelser* 
+*Væsentlige nuancer og udeladelser* \n
 [Her beskrives **kun** de allervigtigste nuancer, som det var **nødvendigt** at komprimere for at danne en overordnet, grupperet holdning. Nævn kun, hvis et meget komplekst eller teknisk høringssvar er blevet væsentligt forenklet for at passe ind i den tematiske struktur.] 
 ``` 
 
@@ -189,15 +189,10 @@ Denne sektion er sekundær til opsummeringen og skal holdes kort. Den dokumenter
 Formatér hver holdning på denne måde: 
 
 ```markdown 
-
 # [Tema-navn] 
-
 ## ([Antal, LU/O]) [Holdningens navn] 
-
 Henvendelse [Liste over svarnumre, adskilt med komma] 
-
 [Opsummering af holdning] 
-
 ``` 
 
 
