@@ -1074,7 +1074,14 @@ async function warmHearingIndex() {
                     const $ = cheerio.load(resp.data);
                     const nextDataEl = $('script#__NEXT_DATA__');
                     if (!nextDataEl.length) return {};
-                    const nextJson = JSON.parse(nextDataEl.html());
+                    // Guard against extremely large __NEXT_DATA__ blobs that can cause OOM in constrained envs
+                    const rawNext = String(nextDataEl.html() || '');
+                    const maxBytes = Number(process.env.NEXT_DATA_MAX_BYTES || 2500000); // ~2.5MB default
+                    if (rawNext.length > maxBytes) {
+                        return {};
+                    }
+                    let nextJson;
+                    try { nextJson = JSON.parse(rawNext); } catch (_) { return {}; }
                     // Reuse extractor for meta if possible
                     let title = null, deadline = null, startDate = null, status = null;
                     const dehydrated = nextJson?.props?.pageProps?.dehydratedState;
@@ -1714,7 +1721,10 @@ async function fetchHearingRootPage(baseUrl, hearingId, axiosInstance) {
     const $ = cheerio.load(resp.data);
     const nextDataEl = $('script#__NEXT_DATA__');
     if (!nextDataEl.length) { logDebug(`[fetchHearingRootPage] ${url} -> missing __NEXT_DATA__`); return { materials: [], nextJson: null }; }
-    const nextJson = JSON.parse(nextDataEl.html());
+    const rawNext = String(nextDataEl.html() || '');
+    const maxBytes = Number(process.env.NEXT_DATA_MAX_BYTES || 2500000);
+    if (rawNext.length > maxBytes) { logDebug(`[fetchHearingRootPage] ${url} -> __NEXT_DATA__ too large (${rawNext.length} > ${maxBytes})`); return { materials: [], nextJson: null }; }
+    let nextJson; try { nextJson = JSON.parse(rawNext); } catch (_) { return { materials: [], nextJson: null }; }
     const materials = extractMaterialsFromNextJson(nextJson, baseUrl);
     logDebug(`[fetchHearingRootPage] ${url} -> materials=${materials.length}`);
     return { materials, nextJson };
@@ -1732,7 +1742,10 @@ async function fetchCommentsPage(baseUrl, hearingId, pageIndex, axiosInstance) {
         const $ = cheerio.load(resp.data);
         const nextDataEl = $('script#__NEXT_DATA__');
         if (!nextDataEl.length) { logDebug(`[fetchCommentsPage] ${url} -> missing __NEXT_DATA__`); continue; }
-        const nextJson = JSON.parse(nextDataEl.html());
+        const rawNext = String(nextDataEl.html() || '');
+        const maxBytes = Number(process.env.NEXT_DATA_MAX_BYTES || 2500000);
+        if (rawNext.length > maxBytes) { logDebug(`[fetchCommentsPage] ${url} -> __NEXT_DATA__ too large (${rawNext.length} > ${maxBytes})`); continue; }
+        let nextJson; try { nextJson = JSON.parse(rawNext); } catch (_) { continue; }
         const { responses, totalPages } = await extractStructuredFromNextJson(nextJson, baseUrl);
         logDebug(`[fetchCommentsPage] ${url} -> responses=${responses.length}, totalPages=${totalPages}`);
         return { responses, totalPages, nextJson };
