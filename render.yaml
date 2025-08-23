@@ -5,8 +5,8 @@ services:
     rootDir: .
     buildCommand: |
       PUPPETEER_SKIP_DOWNLOAD=true npm install --no-audit --no-fund
-      unset PIP_USER PYTHONUSERBASE
-      python3 -m pip install -r requirements.txt
+      mkdir -p python_packages
+      python3 -m pip install --no-cache-dir --no-warn-script-location --target python_packages -r requirements.txt
     startCommand: >
       bash -lc "mkdir -p data/uploads tmp &&
       rm -rf uploads &&
@@ -20,6 +20,8 @@ services:
         value: 20.12.2
       - key: PIP_USER
         value: "0"
+      - key: PYTHONPATH
+        value: "/opt/render/project/src/python_packages"
       - key: YARN_ENABLE_IMMUTABLE_INSTALLS
         value: "false"
       - key: OPENAI_API_KEY
