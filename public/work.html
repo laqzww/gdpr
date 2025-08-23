@@ -1031,15 +1031,15 @@
                     }
                 } catch {}
 
-                // Still nothing: fall back to network; render header ASAP and load rest in background
+                // Still nothing: warm on server and poll DB to avoid long blocking fetches
                 shouldShowOverlay = true;
                 if (shouldShowOverlay) showLoading(true);
                 // Try to fetch lightweight meta quickly to show page header
                 try { await fetchMetaFast(hearingId); } catch {}
-                // Hide overlay now; full data will update UI when ready
+                // Hide overlay now; we will update UI when data becomes available
                 showLoading(false);
-                // Load full data in background and update UI when ready
-                fetchFreshData(hearingId, false).catch(() => {});
+                // Trigger warm and start polling persisted/DB state
+                warmAndPoll(hearingId);
                 return;
             } catch (error) {
                 // Gracefully ignore expected aborts from race conditions; otherwise show error
@@ -1141,40 +1141,67 @@
             }
         }
 
+        // Warm on server and poll DB-only endpoints to avoid long blocking calls on slow backends
+        async function warmAndPoll(hearingId, opts = {}) {
+            const start = Date.now();
+            const maxMs = Number(opts.maxMs || 90000);
+            const pollMs = Number(opts.pollMs || 3000);
+            const showOverlay = opts.showOverlay === true;
+            try {
+                if (showOverlay) showLoading(true);
+                // Fire warm request (non-blocking on server)
+                try {
+                    await fetchWithTimeout(`/api/warm/${encodeURIComponent(hearingId)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' } }, 8000);
+                } catch (_) {}
+                // Poll DB-only aggregate first for quick UI
+                let gotAggregate = false;
+                while (Date.now() - start < maxMs) {
+                    try {
+                        const r = await fetchWithTimeout(`/api/hearing/${encodeURIComponent(hearingId)}?db=1&t=${Date.now()}`, { cache: 'no-cache', headers: { 'Cache-Control': 'no-cache' } }, 8000);
+                        const j = await r.json().catch(() => ({}));
+                        if (j && j.success && j.found && j.hearing) {
+                            lastFetched = { hearing: j.hearing, responses: j.responses || [], materials: lastFetched.materials || [], uploads: lastFetched.uploads || [] };
+                            applySavedEdits();
+                            displayHearingInfo(j.hearing);
+                            displayResponses(lastFetched.responses);
+                            gotAggregate = true;
+                            break;
+                        }
+                    } catch (_) {}
+                    await new Promise(res => setTimeout(res, pollMs));
+                }
+                // Poll materials DB-only (optional)
+                const matStart = Date.now();
+                while (Date.now() - matStart < Math.max(20000, maxMs / 2)) {
+                    try {
+                        const r2 = await fetchWithTimeout(`/api/hearing/${encodeURIComponent(hearingId)}/materials?db=1&t=${Date.now()}`, { cache: 'no-cache', headers: { 'Cache-Control': 'no-cache' } }, 8000);
+                        const j2 = await r2.json().catch(() => ({}));
+                        if (j2 && j2.success && Array.isArray(j2.materials)) {
+                            lastFetched.materials = j2.materials;
+                            displayMaterials(lastFetched.materials);
+                            break;
+                        }
+                    } catch (_) {}
+                    await new Promise(res => setTimeout(res, pollMs));
+                }
+                if (!gotAggregate) {
+                    showError('Data blev ikke klar i tide. Prøv igen om lidt.');
+                } else {
+                    showSuccess('Data klar.');
+                }
+            } finally {
+                if (showOverlay) showLoading(false);
+            }
+        }
+
         async function refreshFromNetwork() {
             const hearingId = getHearingIdFromUrl();
             if (!hearingId) return showError('Intet hørings-ID angivet');
-            showLoading(true);
+            // Prefer warm-and-poll to avoid long network timeouts on Render
             // Clear any existing notifications
             const notificationsContainer = document.getElementById('notifications');
-            if (notificationsContainer) {
-                notificationsContainer.innerHTML = '';
-            }
-            try {
-                const t = Date.now();
-                const resp = await fetchWithTimeout(`/api/hearing/${hearingId}?nocache=1&t=${t}`, { cache: 'no-cache', headers: { 'Cache-Control': 'no-cache' } }, 45000);
-                const data = await resp.json();
-                if (data && data.success) {
-                    lastFetched = { hearing: data.hearing, responses: data.responses, materials: [] };
-                    applySavedEdits();
-                    displayHearingInfo(data.hearing);
-                    // Refresh materials too from network
-                    const r2 = await fetchWithTimeout(`/api/hearing/${hearingId}/materials?nocache=1&t=${t}`, { cache: 'no-cache', headers: { 'Cache-Control': 'no-cache' } }, 35000);
-                    const j2 = await r2.json().catch(()=>({}));
-                    if (j2 && j2.success && Array.isArray(j2.materials)) {
-                        lastFetched.materials = j2.materials;
-                        displayMaterials(lastFetched.materials);
-                    }
-                    displayResponses(lastFetched.responses);
-                    showSuccess('Opdateret fra netværk');
-                } else {
-                    showError('Kunne ikke opdatere fra netværk');
-                }
-            } catch (e) {
-                showError('Netværksfejl ved opdatering');
-            } finally {
-                showLoading(false);
-            }
+            if (notificationsContainer) notificationsContainer.innerHTML = '';
+            warmAndPoll(hearingId, { showOverlay: true, maxMs: 90000, pollMs: 3000 });
         }
 
         function displayHearingInfo(hearing) {
