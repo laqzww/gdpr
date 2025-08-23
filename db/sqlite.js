@@ -50,7 +50,7 @@ function attemptRebuildOnce(hintError) {
     const first = tryRequireBetterSqlite3();
     if (first && typeof first === 'object' && first.name) {
         // Received an Error instance
-        if (needsRebuild(first) && process.env.ALLOW_RUNTIME_SQLITE_REBUILD !== '0') {
+        if (needsRebuild(first) && process.env.ALLOW_RUNTIME_SQLITE_REBUILD === '1') {
             // Try to rebuild then require again
             attemptRebuildOnce(first);
             const second = tryRequireBetterSqlite3();

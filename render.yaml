@@ -10,7 +10,8 @@ services:
       python3 -m pip install --no-cache-dir --no-warn-script-location --target python_packages setuptools==70.0.0 packaging wheel || true
       PUPPETEER_SKIP_DOWNLOAD=true npm install --no-audit --no-fund
       npm rebuild better-sqlite3 --update-binary || true
-      npm rebuild better-sqlite3 --build-from-source || true
+      # Disable source builds on Render since distutils may be missing; prefer prebuilt
+      :
       if [ -f requirements.txt ]; then \
         python3 -m pip install --no-cache-dir --no-warn-script-location --target python_packages -r requirements.txt; \
       else \
@@ -34,6 +35,8 @@ services:
         value: "/opt/render/project/src/python_packages"
       - key: SETUPTOOLS_USE_DISTUTILS
         value: "local"
+      - key: ALLOW_RUNTIME_SQLITE_REBUILD
+        value: "0"
       - key: YARN_ENABLE_IMMUTABLE_INSTALLS
         value: "false"
       - key: OPENAI_API_KEY
