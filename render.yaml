@@ -2,7 +2,7 @@ services:
   - type: web
     name: blivhort-ai
     env: node
-    rootDir: .
+    rootDir: fetcher
     buildCommand: |
       set -e
       export PYTHONPATH="$PWD/python_packages"
@@ -28,10 +28,12 @@ services:
         value: production
       - key: NODE_VERSION
         value: 20.18.1
+      - key: NPM_CONFIG_BUILD_FROM_SOURCE
+        value: "false"
       - key: PIP_USER
         value: "0"
       - key: PYTHONPATH
-        value: "/opt/render/project/src/python_packages"
+        value: "/opt/render/project/src/fetcher/python_packages"
       - key: SETUPTOOLS_USE_DISTUTILS
         value: "local"
       - key: ALLOW_RUNTIME_SQLITE_REBUILD
@@ -82,5 +84,5 @@ services:
         generateValue: true
     disks:
       - name: app-data
-        mountPath: /opt/render/project/src/data
+        mountPath: /opt/render/project/src/fetcher/data
         sizeGB: 1

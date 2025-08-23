@@ -80,7 +80,7 @@ function init() {
     try {
         db = new Database(DB_PATH);
     } catch (e) {
-        if (needsRebuild(e) && process.env.ALLOW_RUNTIME_SQLITE_REBUILD !== '0') {
+        if (needsRebuild(e) && process.env.ALLOW_RUNTIME_SQLITE_REBUILD === '1') {
             attemptRebuildOnce(e);
             const re = tryRequireBetterSqlite3();
             if (typeof re === 'function' || (re && re.open)) {

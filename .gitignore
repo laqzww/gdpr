@@ -8,6 +8,10 @@ node_modules/
 .env
 .env.*
 
+
+# Cursor .cursor
+.cursor/mcp.json
+
 # Data
 data/
 uploads/
@@ -15,6 +19,7 @@ tmp/
 server.log
 server.out
 hearings-cache.json
+
 
 # SQLite
 **/*.sqlite
