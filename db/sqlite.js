@@ -11,7 +11,9 @@ function needsRebuild(error) {
     return (
         msg.includes('node_module_version') ||
         msg.includes('was compiled against a different node.js version') ||
-        msg.includes('invalid or incompatible binary')
+        msg.includes('invalid or incompatible binary') ||
+        msg.includes('did not self-register') ||
+        msg.includes('module did not self-register')
     );
 }
 
