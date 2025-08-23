@@ -4,7 +4,7 @@ services:
     env: node
     rootDir: .
     buildCommand: |
-      npm install --no-audit --no-fund
+      PUPPETEER_SKIP_DOWNLOAD=true npm install --no-audit --no-fund
       python3 -m pip install --user -r requirements.txt
     startCommand: >
       bash -lc "mkdir -p data/uploads tmp &&
