@@ -47,6 +47,28 @@ services:
         value: "1"
       - key: PUBLIC_URL
         value: "https://blivhort-ai.onrender.com"
+      - key: PERSIST_PREFER
+        value: "true"
+      - key: PERSIST_ALWAYS_WRITE
+        value: "true"
+      - key: WARM_ALL_ON_START
+        value: "true"
+      - key: WARM_MAX_HEARINGS
+        value: "0"
+      - key: WARM_RETRY_ATTEMPTS
+        value: "2"
+      - key: INTERNAL_API_TIMEOUT_MS
+        value: "1500000"
+      - key: DISABLE_SEARCH_REMOTE_BACKFILL
+        value: "true"
+      - key: INDEX_REFRESH_MS
+        value: "21600000"
+      - key: CRON_ENABLED
+        value: "1"
+      - key: CRON_INDEX_SCHEDULE
+        value: "0 */6 * * *"
+      - key: CRON_HEARING_REFRESH
+        value: "*/30 * * * *"
       - key: SESSION_SECRET
         generateValue: true
     disks:

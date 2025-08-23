@@ -1235,8 +1235,11 @@ app.get('/api/search', async (req, res) => {
         .sort((a, b) => b.s - a.s || (a.h.deadlineTs || Infinity) - (b.h.deadlineTs || Infinity))
         .slice(0, 50);
 
-    // On-demand title backfill for top items with missing/blank title
+    // On-demand title backfill for top items with missing/blank title (can be disabled via env)
     try {
+        if (String(process.env.DISABLE_SEARCH_REMOTE_BACKFILL || '').toLowerCase() === 'true') {
+            throw new Error('remote backfill disabled');
+        }
         const baseUrl = 'https://blivhoert.kk.dk';
         const axiosInstance = axios.create({
             headers: {
