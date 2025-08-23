@@ -1574,9 +1574,12 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({})
                 });
-                const data = await resp.json().catch(()=>({ success: false }));
+                let data = null;
+                try { data = await resp.json(); }
+                catch (_) { data = { success: false, message: 'Ugyldigt svar fra serveren' }; }
                 if (!data || !data.success) {
-                    showError((data && data.message) || 'Kunne ikke klassificere automatisk');
+                    const msg = (data && (data.message || data.error)) || 'Kunne ikke klassificere automatisk';
+                    showError(msg);
                     return;
                 }
                 const suggestions = Array.isArray(data.suggestions) ? data.suggestions : [];

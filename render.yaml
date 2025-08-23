@@ -5,6 +5,7 @@ services:
     rootDir: .
     buildCommand: |
       PUPPETEER_SKIP_DOWNLOAD=true npm install --no-audit --no-fund
+      npm rebuild better-sqlite3 --build-from-source
       if [ -f requirements.txt ]; then \
         mkdir -p python_packages && \
         python3 -m pip install --no-cache-dir --no-warn-script-location --target python_packages -r requirements.txt; \
@@ -39,7 +40,9 @@ services:
       - key: PUPPETEER_SKIP_CHROMIUM_DOWNLOAD
         value: "true"
       - key: NODE_OPTIONS
-        value: "--enable-source-maps --max-old-space-size=512"
+        value: "--enable-source-maps --max-old-space-size=768"
+      - key: PUBLIC_URL
+        value: "https://blivhort-ai.onrender.com"
       - key: SESSION_SECRET
         generateValue: true
     disks:

@@ -36,6 +36,8 @@ const TEMPERATURE = typeof process.env.TEMPERATURE !== 'undefined' ? Number(proc
 const MAX_TOKENS = typeof process.env.MAX_TOKENS !== 'undefined' ? Number(process.env.MAX_TOKENS) : null;
 // Increase internal HTTP timeout for long-running local API calls used during summarization
 const INTERNAL_API_TIMEOUT_MS = Number(process.env.INTERNAL_API_TIMEOUT_MS || 1500000);
+// Conservative timeout for internal calls made by light endpoints (e.g., classification)
+const CLASSIFY_INTERNAL_TIMEOUT_MS = Number(process.env.CLASSIFY_INTERNAL_TIMEOUT_MS || 60000);
 // Max time the summarization SSE should be allowed to run (25 minutes default)
 const SUMMARIZE_TIMEOUT_MS = Number(process.env.SUMMARIZE_TIMEOUT_MS || 1500000);
 // Background mode default
@@ -498,7 +500,7 @@ async function buildPromptFromInput(hearingId, input) {
     const base = `http://localhost:${PORT}`;
     if (!hearing || !responses || !materials) {
         try {
-            const r = await axios.get(`${base}/api/hearing/${hearingId}?persist=1`, { validateStatus: () => true, timeout: INTERNAL_API_TIMEOUT_MS });
+            const r = await axios.get(`${(process.env.PUBLIC_URL || '').trim() || `http://localhost:${PORT}`}/api/hearing/${hearingId}?persist=1`, { validateStatus: () => true, timeout: INTERNAL_API_TIMEOUT_MS });
             if (r && r.data && r.data.success) {
                 hearing = hearing || r.data.hearing;
                 responses = responses || r.data.responses || [];
@@ -1928,6 +1930,17 @@ app.get('/api/hearing/:id', async (req, res) => {
                 return res.json({ success: true, found: false });
             }
         }
+        // Prefer persisted on disk if requested or configured and not stale
+        try {
+            const preferPersist = PERSIST_PREFER || String(req.query.persist || '').trim() === '1';
+            if (preferPersist) {
+                const meta = readPersistedHearingWithMeta(hearingId);
+                const persisted = meta?.data;
+                if (persisted && persisted.success && Array.isArray(persisted.responses) && !isPersistStale(meta)) {
+                    return res.json({ success: true, hearing: persisted.hearing, totalPages: persisted.totalPages || undefined, totalResponses: persisted.responses.length, responses: persisted.responses });
+                }
+            }
+        } catch (_) {}
         // Serve from SQLite first if available
         try {
             const fromDb = readAggregate(hearingId);
@@ -2510,8 +2523,13 @@ app.post('/api/auto-classify-respondents/:id', express.json({ limit: '1mb' }), a
         }
 
         // Fetch current hearing data (meta + responses) via our own API for consistency
-        const base = `http://localhost:${PORT}`;
-        const agg = await axios.get(`${base}/api/hearing/${encodeURIComponent(hearingId)}?persist=1`, { validateStatus: () => true, timeout: INTERNAL_API_TIMEOUT_MS });
+        // Use absolute origin to avoid localhost when running behind a proxy (e.g., Render)
+        const base = (process.env.PUBLIC_URL || '').trim() || `http://localhost:${PORT}`;
+        // Shorter timeout for this lightweight fetch to avoid long hangs surfacing as generic NS_ERROR_FAILURE on client
+        const agg = await axios.get(`${base}/api/hearing/${encodeURIComponent(hearingId)}?persist=1`, { validateStatus: () => true, timeout: CLASSIFY_INTERNAL_TIMEOUT_MS }).catch(err => ({ data: null, err }));
+        if (!agg || !agg.data) {
+            return res.status(504).json({ success: false, message: 'Tidsudløb ved hentning af data til klassificering' });
+        }
         if (!agg.data?.success) {
             return res.status(500).json({ success: false, message: 'Kunne ikke hente høringsdata' });
         }
@@ -2702,7 +2720,7 @@ app.get('/api/summarize/:id', async (req, res) => {
 
         sendEvent('info', { message: 'Henter høringsdata...' });
 
-        const base = `http://localhost:${PORT}`;
+        const base = (process.env.PUBLIC_URL || '').trim() || `http://localhost:${PORT}`;
         sendEvent('status', { phase: 'fetching', message: 'Henter høringsdata…' });
         // Stream periodic progress while aggregator runs
         let fetchSeconds = 0;

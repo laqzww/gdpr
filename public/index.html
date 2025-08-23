@@ -824,7 +824,7 @@
             // Initialize data cache
             if (window.dataCache) {
                 await window.dataCache.init();
-                // Preload search index
+                // Preload search index (handled by SW/API cache); do not overfetch materials unless requested
                 loadSearchIndex();
             }
             
