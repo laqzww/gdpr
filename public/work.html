@@ -267,12 +267,14 @@
         
         .summary-variants {
             display: grid;
-            grid-template-columns: repeat(3, minmax(420px, 1fr));
+            /* Prevent overflow by allowing columns to shrink; maintain 3 columns on wide screens */
+            grid-template-columns: repeat(3, minmax(0, 1fr));
             gap: var(--space-lg);
             margin-top: var(--space-xl);
             max-width: 100%;
             margin-left: auto;
             margin-right: auto;
+            width: 100%;
         }
         
         .summary-variant {
@@ -284,6 +286,9 @@
             width: 100%;
             display: flex;
             flex-direction: column;
+            /* Allow grid items to shrink within their tracks */
+            min-width: 0;
+            box-sizing: border-box;
         }
         
         .summary-variant.selected {
@@ -489,7 +494,8 @@
         }
 
         @media (max-width: 1200px) {
-            .summary-variants { grid-template-columns: repeat(2, minmax(320px, 1fr)); }
+            /* Switch to two columns on medium screens without overflow */
+            .summary-variants { grid-template-columns: repeat(2, minmax(0, 1fr)); }
         }
         @media (max-width: 768px) {
             .summary-variants { grid-template-columns: 1fr; }
@@ -878,7 +884,7 @@
         const approvedSteps = { 1: false, 2: false };
 
         // Fetch with timeout helper to avoid indefinite hangs on slow backends
-        async function fetchWithTimeout(resource, options = {}, timeoutMs = 20000) {
+        async function fetchWithTimeout(resource, options = {}, timeoutMs = 30000) {
             const controller = new AbortController();
             const timerId = setTimeout(() => { try { controller.abort(); } catch {} }, timeoutMs);
             try {
@@ -1036,8 +1042,13 @@
                 fetchFreshData(hearingId, false).catch(() => {});
                 return;
             } catch (error) {
-                showError('Netværksfejl. Tjek venligst din internetforbindelse og prøv igen.');
-                console.error('Error:', error);
+                // Gracefully ignore expected aborts from race conditions; otherwise show error
+                if (error && (error.name === 'AbortError' || String(error).includes('AbortError'))) {
+                    console.warn('Fetch aborted (expected in race):', resource);
+                } else {
+                    showError('Netværksfejl. Tjek venligst din internetforbindelse og prøv igen.');
+                    console.error('Error:', error);
+                }
                 if (shouldShowOverlay) showLoading(false);
             }
         }
@@ -1094,8 +1105,12 @@
                 }
             } catch (error) {
                 if (!isBackgroundUpdate) {
-                    showError('Netværksfejl. Tjek venligst din internetforbindelse og prøv igen.');
-                    console.error('Error:', error);
+                    if (error && (error.name === 'AbortError' || String(error).includes('AbortError'))) {
+                        console.warn('Fetch aborted (fresh data):', error);
+                    } else {
+                        showError('Netværksfejl. Tjek venligst din internetforbindelse og prøv igen.');
+                        console.error('Error:', error);
+                    }
                     showLoading(false);
                 }
             }
@@ -1119,7 +1134,11 @@
                         await window.dataCache.setMaterials(hearingId, json.materials);
                     }
                 }
-            } catch (_) {}
+            } catch (e) {
+                if (!(e && (e.name === 'AbortError' || String(e).includes('AbortError')))) {
+                    console.warn('Materials fetch failed', e);
+                }
+            }
         }
 
         async function refreshFromNetwork() {

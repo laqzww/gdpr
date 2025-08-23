@@ -81,6 +81,13 @@ function resolvePromptPath() {
     if (fs.existsSync(candidate1)) return candidate1;
     return path.join(__dirname, 'prompts', 'prompt.md');
 }
+
+function resolveClassifierPromptPath() {
+    if (process.env.CLASSIFIER_PROMPT_PATH) return process.env.CLASSIFIER_PROMPT_PATH;
+    const candidate = path.join(__dirname, 'prompts', 'auto-classify-respondents.md');
+    if (fs.existsSync(candidate)) return candidate;
+    return candidate;
+}
 function resolveTemplatePath() {
     if (process.env.DOCX_TEMPLATE_PATH) return process.env.DOCX_TEMPLATE_PATH;
     const templatesDir = path.join(__dirname, 'templates');
@@ -101,6 +108,7 @@ function resolveTemplatePath() {
     return path.join(__dirname, 'templates', 'template.docx');
 }
 const PROMPT_PATH = resolvePromptPath();
+const CLASSIFIER_PROMPT_PATH = resolveClassifierPromptPath();
 const TEMPLATE_DOCX = resolveTemplatePath();
 
 const LOG_FILE = path.join(__dirname, 'server.log');
@@ -2584,7 +2592,7 @@ app.post('/api/auto-classify-respondents/:id', express.json({ limit: '1mb' }), a
             text: String(r.text || '').slice(0, 1200)
         }));
 
-        const systemPrompt = [
+        const systemPrompt = readTextFileSafe(CLASSIFIER_PROMPT_PATH) || [
             'Du er en hjælper, der klassificerer afsendere af høringssvar.',
             'Regler:',
             '- Privatpersoner skal forblive anonyme: lad dem stå som respondentType "Borger" og respondentName "Borger" (ændr ikke).',
@@ -2609,8 +2617,8 @@ app.post('/api/auto-classify-respondents/:id', express.json({ limit: '1mb' }), a
             const params = {
                 model: MODEL_ID,
                 input: [
-                    { role: 'system', content: systemPrompt },
-                    { role: 'user', content: userPrompt }
+                    { role: 'system', content: [{ type: 'input_text', text: systemPrompt }] },
+                    { role: 'user', content: [{ type: 'input_text', text: userPrompt }] }
                 ],
                 stream: false
             };
@@ -2625,7 +2633,8 @@ app.post('/api/auto-classify-respondents/:id', express.json({ limit: '1mb' }), a
                 }
             }
         } catch (e) {
-            return res.status(500).json({ success: false, message: 'OpenAI-kald fejlede', error: e?.message || String(e) });
+            // Surface JSON with message, but continue to prefer clear error
+            return res.status(500).json({ success: false, message: 'OpenAI-kald fejlede', error: e && e.message ? e.message : String(e) });
         }
 
         const cleaned = String(outputText || '')
