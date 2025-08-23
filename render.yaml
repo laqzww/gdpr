@@ -4,10 +4,14 @@ services:
     env: node
     rootDir: .
     buildCommand: |
+      set -e
+      export PYTHONPATH="$PWD/python_packages"
+      mkdir -p python_packages
+      python3 -m pip install --no-cache-dir --no-warn-script-location --target python_packages setuptools==70.0.0 packaging wheel || true
       PUPPETEER_SKIP_DOWNLOAD=true npm install --no-audit --no-fund
-      npm rebuild better-sqlite3 --build-from-source
+      npm rebuild better-sqlite3 --update-binary || true
+      npm rebuild better-sqlite3 --build-from-source || true
       if [ -f requirements.txt ]; then \
-        mkdir -p python_packages && \
         python3 -m pip install --no-cache-dir --no-warn-script-location --target python_packages -r requirements.txt; \
       else \
         echo 'No Python requirements.txt found, skipping'; \
@@ -28,6 +32,8 @@ services:
         value: "0"
       - key: PYTHONPATH
         value: "/opt/render/project/src/python_packages"
+      - key: SETUPTOOLS_USE_DISTUTILS
+        value: "local"
       - key: YARN_ENABLE_IMMUTABLE_INSTALLS
         value: "false"
       - key: OPENAI_API_KEY
