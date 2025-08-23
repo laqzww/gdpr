@@ -113,7 +113,11 @@ const TEMPLATE_DOCX = resolveTemplatePath();
 
 const LOG_FILE = path.join(__dirname, 'server.log');
 function logDebug(message) {
-    try { fs.appendFileSync(LOG_FILE, `[${new Date().toISOString()}] ${message}\n`); } catch (_) {}
+    try {
+        const line = `[${new Date().toISOString()}] ${String(message || '')}`;
+        try { fs.appendFileSync(LOG_FILE, `${line}\n`); } catch (_) {}
+        try { console.log(line); } catch (_) {}
+    } catch (_) {}
 }
 
 // Compute fast pre-thought headings from input to show immediate reasoning summary
@@ -1952,14 +1956,18 @@ app.get('/api/hearing/:id', async (req, res) => {
         const hearingId = String(req.params.id).trim();
         const noCache = String(req.query.nocache || '').trim() === '1';
         const dbOnly = String(req.query.db || '').trim() === '1';
+        logDebug(`[api/hearing] start id=${hearingId} dbOnly=${dbOnly} noCache=${noCache} persist=${String(req.query.persist||'')}`);
         if (dbOnly) {
             try {
                 const fromDb = readAggregate(hearingId);
                 if (fromDb && fromDb.hearing) {
+                    logDebug(`[api/hearing] dbOnly hit id=${hearingId} responses=${(fromDb.responses||[]).length}`);
                     return res.json({ success: true, found: true, hearing: fromDb.hearing, totalResponses: (fromDb.responses||[]).length, responses: fromDb.responses });
                 }
+                logDebug(`[api/hearing] dbOnly miss id=${hearingId}`);
                 return res.json({ success: true, found: false });
             } catch (e) {
+                logDebug(`[api/hearing] dbOnly exception id=${hearingId} err=${e && e.message}`);
                 return res.json({ success: true, found: false });
             }
         }
@@ -1970,6 +1978,7 @@ app.get('/api/hearing/:id', async (req, res) => {
                 const meta = readPersistedHearingWithMeta(hearingId);
                 const persisted = meta?.data;
                 if (persisted && persisted.success && Array.isArray(persisted.responses) && !isPersistStale(meta)) {
+                    logDebug(`[api/hearing] persisted hit id=${hearingId} responses=${persisted.responses.length}`);
                     return res.json({ success: true, hearing: persisted.hearing, totalPages: persisted.totalPages || undefined, totalResponses: persisted.responses.length, responses: persisted.responses });
                 }
             }
@@ -1978,12 +1987,13 @@ app.get('/api/hearing/:id', async (req, res) => {
         try {
             const fromDb = readAggregate(hearingId);
             if (!noCache && fromDb && fromDb.hearing) {
+                logDebug(`[api/hearing] sqlite hit id=${hearingId} responses=${(fromDb.responses||[]).length}`);
                 return res.json({ success: true, hearing: fromDb.hearing, totalPages: undefined, totalResponses: (fromDb.responses||[]).length, responses: fromDb.responses });
             }
         } catch (_) {}
         if (!noCache) {
             const cached = cacheGet(hearingAggregateCache, hearingId);
-            if (cached) return res.json(cached);
+            if (cached) { logDebug(`[api/hearing] memory cache hit id=${hearingId} responses=${(cached.responses||[]).length||0}`); return res.json(cached); }
         }
         const baseUrl = 'https://blivhoert.kk.dk';
 
@@ -2136,6 +2146,7 @@ app.get('/api/hearing/:id', async (req, res) => {
         };
         try { upsertHearing(hearing); replaceResponses(hearing.id, normalizedResponses); } catch (_) {}
         cacheSet(hearingAggregateCache, hearingId, payload);
+        logDebug(`[api/hearing] success id=${hearingId} responses=${normalizedResponses.length} totalPages=${totalPages}`);
         res.json(payload);
     } catch (error) {
         console.error(`Error in /api/hearing/${req.params.id}:`, error.message);
@@ -2295,12 +2306,15 @@ app.get('/api/hearing/:id/materials', async (req, res) => {
         const hearingId = String(req.params.id).trim();
         const noCache = String(req.query.nocache || '').trim() === '1';
         const dbOnly = String(req.query.db || '').trim() === '1';
+        logDebug(`[api/materials] start id=${hearingId} dbOnly=${dbOnly} noCache=${noCache} persist=${String(req.query.persist||'')}`);
         if (dbOnly) {
             try {
                 const rows = sqliteDb && sqliteDb.prepare ? sqliteDb.prepare(`SELECT * FROM materials WHERE hearing_id=? ORDER BY idx ASC`).all(hearingId) : [];
                 const materials = (rows||[]).map(m => ({ type: m.type, title: m.title, url: m.url, content: m.content }));
+                logDebug(`[api/materials] dbOnly ${materials.length}`);
                 return res.json({ success: true, found: materials.length > 0, materials });
             } catch {
+                logDebug(`[api/materials] dbOnly exception`);
                 return res.json({ success: true, found: false, materials: [] });
             }
         }
@@ -2309,12 +2323,13 @@ app.get('/api/hearing/:id/materials', async (req, res) => {
             const meta = readPersistedHearingWithMeta(hearingId);
             const persisted = meta?.data;
             if (persisted && persisted.success && Array.isArray(persisted.materials) && !isPersistStale(meta)) {
+                logDebug(`[api/materials] persisted hit ${persisted.materials.length}`);
                 return res.json({ success: true, materials: persisted.materials });
             }
         }
         if (!noCache) {
             const cached = cacheGet(hearingMaterialsCache, hearingId);
-            if (cached) return res.json(cached);
+            if (cached) { logDebug(`[api/materials] memory cache hit ${(cached.materials||[]).length}`); return res.json(cached); }
         }
         const baseUrl = 'https://blivhoert.kk.dk';
         const axiosInstance = axios.create({ headers: { 'User-Agent': 'Mozilla/5.0', 'Cookie': 'kk-xyz=1', 'Accept-Language': 'da-DK,da;q=0.9', 'Referer': `${baseUrl}/hearing/${hearingId}` }, timeout: 30000 });
@@ -2403,6 +2418,7 @@ app.get('/api/hearing/:id/materials', async (req, res) => {
         const payload = { success: true, materials };
         try { replaceMaterials(hearingId, materials); } catch (_) {}
         cacheSet(hearingMaterialsCache, hearingId, payload);
+        logDebug(`[api/materials] success id=${hearingId} materials=${materials.length}`);
         res.json(payload);
     } catch (e) {
         res.status(500).json({ success: false, message: 'Uventet fejl', error: e.message });
@@ -2429,10 +2445,11 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
 app.post('/api/warm/:id', async (req, res) => {
     try {
         const hearingId = String(req.params.id).trim();
+        logDebug(`[warm] queue id=${hearingId}`);
         // Fire-and-forget: trigger internal fetches without waiting for completion
         (async () => {
-            try { await axios.get(`http://localhost:${PORT}/api/hearing/${encodeURIComponent(hearingId)}?nocache=1`); } catch {}
-            try { await axios.get(`http://localhost:${PORT}/api/hearing/${encodeURIComponent(hearingId)}/materials?nocache=1`); } catch {}
+            try { await axios.get(`http://localhost:${PORT}/api/hearing/${encodeURIComponent(hearingId)}?nocache=1`, { validateStatus: () => true, timeout: 120000 }); } catch (e) { logDebug(`[warm] hearing fetch failed id=${hearingId} ${e && e.message}`); }
+            try { await axios.get(`http://localhost:${PORT}/api/hearing/${encodeURIComponent(hearingId)}/materials?nocache=1`, { validateStatus: () => true, timeout: 120000 }); } catch (e) { logDebug(`[warm] materials fetch failed id=${hearingId} ${e && e.message}`); }
         })();
         res.json({ success: true, queued: true });
     } catch (e) {
@@ -3938,6 +3955,18 @@ app.get('/debug/hearing/:id', async (req, res) => {
         res.send(html);
     } catch (error) {
         res.status(500).send(`<pre>Fejl: ${error.message}</pre>`);
+    }
+});
+
+// Accept client-side logs to surface errors in Render logs
+app.post('/api/client-log', express.json({ limit: '256kb' }), (req, res) => {
+    try {
+        const { level = 'info', message = '', meta = {} } = req.body || {};
+        const line = `[client] ${level}: ${message} ${Object.keys(meta||{}).length ? JSON.stringify(meta) : ''}`;
+        logDebug(line);
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ success: false });
     }
 });
 

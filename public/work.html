@@ -986,8 +986,8 @@
                             }
                         } catch {}
                         
-                        // Then fetch fresh data in background
-                        fetchFreshData(hearingId, true);
+                        // Then warm and poll in background to avoid long blocking requests on Render
+                        try { warmAndPoll(hearingId, { showOverlay: false, maxMs: 120000, pollMs: 2500 }); } catch (_) {}
                         return;
                     }
                 }
@@ -1054,98 +1054,52 @@
         }
         
         async function fetchFreshData(hearingId, isBackgroundUpdate) {
+            // Switch to warm-and-poll path to avoid long blocking requests on Render
             try {
-                const timestamp = new Date().getTime();
-                const preferPersist = true;
-                const response = await fetchWithTimeout(`/api/hearing/${hearingId}?t=${timestamp}${preferPersist?'&persist=1':''}`, {
-                    cache: 'no-cache',
-                    headers: {
-                        'Cache-Control': 'no-cache'
-                    }
-                }, 45000);
-                const data = await response.json();
-
-                if (data.success) {
-                    // Update cache
-                    if (window.dataCache) {
-                        await window.dataCache.setHearing(hearingId, data);
-                        if (data.responses) {
-                            await window.dataCache.setResponses(hearingId, data.responses);
-                        }
-                    }
-                    
-                    if (!isBackgroundUpdate) {
-                        // Clear any existing notifications
-                        const notificationsContainer = document.getElementById('notifications');
-                        if (notificationsContainer) {
-                            notificationsContainer.innerHTML = '';
-                        }
-                        lastFetched = { hearing: data.hearing, responses: data.responses, materials: [], uploads: [] };
-                        applySavedEdits();
-                        displayHearingInfo(data.hearing);
-                        displayResponses(lastFetched.responses);
-                        showLoading(false);
-                    } else if (data.hearing.title !== lastFetched.hearing.title || 
-                             data.responses.length !== lastFetched.responses.length) {
-                        // Update UI if data changed
-                        lastFetched = { hearing: data.hearing, responses: data.responses, materials: lastFetched.materials, uploads: [] };
-                        applySavedEdits();
-                        displayHearingInfo(data.hearing);
-                        displayResponses(lastFetched.responses);
-                        showSuccess('Data opdateret');
-                    }
-                    
-                    // Fetch materials
-                    fetchMaterials(data.hearing.id).catch(() => {});
-                } else {
-                    if (!isBackgroundUpdate) {
-                        showError(data.message || 'Der opstod en fejl ved hentning af data');
-                        showLoading(false);
-                    }
-                }
+                return await warmAndPoll(hearingId, { showOverlay: !isBackgroundUpdate, maxMs: 120000, pollMs: 2500 });
             } catch (error) {
+                try { await fetch('/api/client-log', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ level: 'error', message: 'fetchFreshData failed', meta: { hearingId, isBackgroundUpdate, error: String(error) } }) }); } catch {}
                 if (!isBackgroundUpdate) {
-                    if (error && (error.name === 'AbortError' || String(error).includes('AbortError'))) {
-                        console.warn('Fetch aborted (fresh data):', error);
-                    } else {
-                        showError('Netværksfejl. Tjek venligst din internetforbindelse og prøv igen.');
-                        console.error('Error:', error);
-                    }
+                    showError('Netværksfejl. Prøv igen.');
                     showLoading(false);
                 }
             }
         }
 
         async function fetchMaterials(hearingId) {
+            // Prefer DB-first and avoid long blocking; then warm and poll if empty
             try {
-                const timestamp = new Date().getTime();
-                const preferPersist = true;
-                const r = await fetchWithTimeout(`/api/hearing/${hearingId}/materials?t=${timestamp}${preferPersist?'&persist=1':''}`, { 
-                    cache: 'no-cache', 
-                    headers: { 'Cache-Control': 'no-cache' } 
-                }, 35000);
-                const json = await r.json();
-                if (json && json.success && Array.isArray(json.materials)) {
-                    lastFetched.materials = json.materials;
+                const t = Date.now();
+                const rdb = await fetchWithTimeout(`/api/hearing/${hearingId}/materials?db=1&t=${t}`, { cache: 'no-cache', headers: { 'Cache-Control': 'no-cache' } }, 10000);
+                const jdb = await rdb.json().catch(()=>({}));
+                if (jdb && jdb.success && Array.isArray(jdb.materials) && jdb.materials.length) {
+                    lastFetched.materials = jdb.materials;
                     displayMaterials(lastFetched.materials);
-                    
-                    // Update cache
-                    if (window.dataCache) {
-                        await window.dataCache.setMaterials(hearingId, json.materials);
-                    }
+                    if (window.dataCache) { try { await window.dataCache.setMaterials(hearingId, jdb.materials); } catch {} }
+                    return;
+                }
+            } catch (_) {}
+            try {
+                await warmAndPoll(hearingId, { showOverlay: false, maxMs: 60000, pollMs: 2500 });
+                // After warm+poll, attempt DB-only again
+                const t2 = Date.now();
+                const r2 = await fetchWithTimeout(`/api/hearing/${hearingId}/materials?db=1&t=${t2}`, { cache: 'no-cache', headers: { 'Cache-Control': 'no-cache' } }, 10000);
+                const j2 = await r2.json().catch(()=>({}));
+                if (j2 && j2.success && Array.isArray(j2.materials)) {
+                    lastFetched.materials = j2.materials;
+                    displayMaterials(lastFetched.materials);
+                    if (window.dataCache) { try { await window.dataCache.setMaterials(hearingId, j2.materials); } catch {} }
                 }
             } catch (e) {
-                if (!(e && (e.name === 'AbortError' || String(e).includes('AbortError')))) {
-                    console.warn('Materials fetch failed', e);
-                }
+                try { await fetch('/api/client-log', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ level: 'warn', message: 'fetchMaterials warm+poll failed', meta: { hearingId, error: String(e) } }) }); } catch {}
             }
         }
 
         // Warm on server and poll DB-only endpoints to avoid long blocking calls on slow backends
         async function warmAndPoll(hearingId, opts = {}) {
             const start = Date.now();
-            const maxMs = Number(opts.maxMs || 90000);
-            const pollMs = Number(opts.pollMs || 3000);
+            const maxMs = Number(opts.maxMs || 120000);
+            const pollMs = Number(opts.pollMs || 2500);
             const showOverlay = opts.showOverlay === true;
             try {
                 if (showOverlay) showLoading(true);
@@ -1184,11 +1138,7 @@
                     } catch (_) {}
                     await new Promise(res => setTimeout(res, pollMs));
                 }
-                if (!gotAggregate) {
-                    showError('Data blev ikke klar i tide. Prøv igen om lidt.');
-                } else {
-                    showSuccess('Data klar.');
-                }
+                if (!gotAggregate) { showError('Data blev ikke klar i tide. Prøv igen om lidt.'); }
             } finally {
                 if (showOverlay) showLoading(false);
             }
@@ -1552,10 +1502,12 @@
         }
 
         function showError(message) {
+            try { fetch('/api/client-log', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ level: 'error', message: String(message||''), meta: { url: location.href } }) }); } catch {}
             showNotification(message, 'error');
         }
 
         function showSuccess(message) {
+            try { if (Math.random() < 0.02) fetch('/api/client-log', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ level: 'info', message: String(message||'') }) }); } catch {}
             showNotification(message, 'success');
         }
 
@@ -1832,12 +1784,10 @@
             const bgParam = usp.get('bg');
             const testParam = usp.get('test');
             const demoPart = demoParam ? `&demo=${encodeURIComponent(demoParam)}` : '';
-            // Force direct streaming to minimize stalls; server has its own fallback
-            const bgPart = '&bg=0';
+            // Prefer background mode by default on Render-like environments to avoid long-lived streams being cut
+            const bgPart = (bgParam !== null) ? `&bg=${encodeURIComponent(bgParam)}` : '&bg=1';
             const testPart = testParam ? `&test=${encodeURIComponent(testParam)}` : '';
-            // Default to direct streaming (bg=0) unless explicitly overridden via URL param
-            const bgQuery = bgPart;
-            const url = `/api/summarize/${hearingId}?n=3&t=${Date.now()}${demoPart}${bgQuery}${testPart}`;
+            const url = `/api/summarize/${hearingId}?n=3&t=${Date.now()}${demoPart}${bgPart}${testPart}`;
             const progressEl = document.getElementById('genProgress2');
             let fallbackTimer = null;
             let controller = new AbortController();
@@ -2096,7 +2046,7 @@
                 const bgParam = usp.get('bg');
                 const demoParam = usp.get('demo');
                 const delayParam = usp.get('delay');
-                const bgPart = bgParam ? `&bg=${encodeURIComponent(bgParam)}` : '';
+                const bgPart = bgParam ? `&bg=${encodeURIComponent(bgParam)}` : '&bg=1';
                 const demoPart = demoParam ? `&demo=${encodeURIComponent(demoParam)}` : '';
                 const delayPart = delayParam ? `&delay=${encodeURIComponent(delayParam)}` : '';
                 // Prepare minimal respondent overrides for fallback GET as URL-encoded JSON
@@ -2130,8 +2080,8 @@
                         }
                     }
                 } catch (_) {}
-                // Force direct streaming (bg=0) for fallback to avoid background stream stalls
-                const url = `/api/summarize/${hearingId}?n=3&t=${Date.now()}&bg=0${demoPart}${delayPart}${editsPart}`;
+                // Default to background mode for resilience on proxies that cut long-lived streams
+                const url = `/api/summarize/${hearingId}?n=3&t=${Date.now()}${bgPart}${demoPart}${delayPart}${editsPart}`;
                 const es = new EventSource(url);
                 window.__genEventSource = es;
                 const progressEl = document.getElementById('genProgress2');
