@@ -5,8 +5,12 @@ services:
     rootDir: .
     buildCommand: |
       PUPPETEER_SKIP_DOWNLOAD=true npm install --no-audit --no-fund
-      mkdir -p python_packages
-      python3 -m pip install --no-cache-dir --no-warn-script-location --target python_packages -r requirements.txt
+      if [ -f requirements.txt ]; then \
+        mkdir -p python_packages && \
+        python3 -m pip install --no-cache-dir --no-warn-script-location --target python_packages -r requirements.txt; \
+      else \
+        echo 'No Python requirements.txt found, skipping'; \
+      fi
     startCommand: >
       bash -lc "mkdir -p data/uploads tmp &&
       rm -rf uploads &&
