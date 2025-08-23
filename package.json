@@ -3,7 +3,7 @@
     "version": "1.0.0",
     "description": "",
     "main": "server.js",
-    "engines": { "node": "20.x" },
+    "engines": { "node": "20.19.4" },
     "scripts": {
         "test": "echo \"Error: no test specified\" && exit 1",
         "postinstall": "node -e \"try{const D=require('better-sqlite3');new D(':memory:');process.exit(0)}catch(e){process.exit(1)}\" || npm rebuild better-sqlite3 --update-binary || true",

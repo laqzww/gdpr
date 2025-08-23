@@ -20,8 +20,15 @@ services:
     startCommand: >
       bash -lc "mkdir -p data/uploads tmp &&
       rm -rf uploads &&
-      ln -s data/uploads uploads &&
-      node server.js"
+      ln -s data/uploads uploads || true &&
+      if node -v | grep -q '^v20\.'; then
+        echo Using system Node: $(node -v) && node server.js;
+      else
+        echo 'Downloading Node 20 runtime…' &&
+        cd tmp && NODEV=20.19.4 && curl -fsSL https://nodejs.org/dist/v$NODEV/node-v$NODEV-linux-x64.tar.xz -o node20.tar.xz &&
+        mkdir -p node20 && tar -xJf node20.tar.xz --strip-components=1 -C node20 && cd .. &&
+        ./tmp/node20/bin/node -v && ./tmp/node20/bin/node server.js;
+      fi"
     healthCheckPath: /healthz
     envVars:
       - key: NODE_ENV
