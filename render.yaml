@@ -5,7 +5,7 @@ services:
     rootDir: .
     buildCommand: |
       PUPPETEER_SKIP_DOWNLOAD=true npm install --no-audit --no-fund
-      python3 -m pip install --user -r requirements.txt
+      python3 -m pip install -r requirements.txt
     startCommand: >
       bash -lc "mkdir -p data/uploads tmp &&
       rm -rf uploads &&
