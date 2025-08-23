@@ -1044,7 +1044,7 @@
             } catch (error) {
                 // Gracefully ignore expected aborts from race conditions; otherwise show error
                 if (error && (error.name === 'AbortError' || String(error).includes('AbortError'))) {
-                    console.warn('Fetch aborted (expected in race):', resource);
+                    console.warn('Fetch aborted (expected in race):', error);
                 } else {
                     showError('Netværksfejl. Tjek venligst din internetforbindelse og prøv igen.');
                     console.error('Error:', error);

@@ -149,6 +149,10 @@ app.use(cors());
 app.use(express.static(path.join(__dirname, 'public')));
 const upload = multer({ dest: path.join(__dirname, 'uploads') });
 try { fs.mkdirSync(path.join(__dirname, 'uploads'), { recursive: true }); } catch {}
+// Ensure templates dir exists for DOCX builder (python script writes template if missing)
+try { fs.mkdirSync(path.join(__dirname, 'templates'), { recursive: true }); } catch {}
+// Ensure persistent data dir exists BEFORE session + DB init
+try { fs.mkdirSync(path.join(__dirname, 'data'), { recursive: true }); } catch {}
 
 // Initialize SQLite and sessions
 try { initDb(); } catch (e) { console.error('SQLite init failed:', e.message); }
@@ -2569,13 +2573,35 @@ app.post('/api/auto-classify-respondents/:id', express.json({ limit: '1mb' }), a
             } catch {}
         }
         if (!responses.length) {
-            // If no local/persist data, trigger a background prefetch and return quickly to avoid client-side NS_ERROR_FAILURE
+            // Try to fetch and persist immediately (blocking, but short) before queuing
             try {
                 const base = (process.env.PUBLIC_URL || '').trim() || `http://localhost:${PORT}`;
-                // Fire-and-forget prefetch
-                axios.post(`${base}/api/prefetch/${encodeURIComponent(hearingId)}`, {}, { validateStatus: () => true, timeout: 10000 }).catch(() => {});
+                await axios.get(`${base}/api/hearing/${encodeURIComponent(hearingId)}?nocache=1`, { validateStatus: () => true, timeout: 45000 });
             } catch {}
-            return res.status(202).json({ success: true, suggestions: [], queued: true, message: 'Data for høringen er ikke klar endnu. Forvarmer i baggrunden – prøv igen om lidt.' });
+            // Re-check DB and persisted after fetch attempt
+            try {
+                const fromDb2 = readAggregate(hearingId);
+                if (fromDb2 && Array.isArray(fromDb2.responses) && fromDb2.responses.length) {
+                    responses = fromDb2.responses;
+                }
+            } catch {}
+            if (!responses.length) {
+                try {
+                    const meta2 = readPersistedHearingWithMeta(hearingId);
+                    const persisted2 = meta2?.data;
+                    if (persisted2 && persisted2.success && Array.isArray(persisted2.responses) && !isPersistStale(meta2)) {
+                        responses = persisted2.responses;
+                    }
+                } catch {}
+            }
+            if (!responses.length) {
+                // As a final step, queue a prefetch and return 202
+                try {
+                    const base = (process.env.PUBLIC_URL || '').trim() || `http://localhost:${PORT}`;
+                    axios.post(`${base}/api/prefetch/${encodeURIComponent(hearingId)}`, {}, { validateStatus: () => true, timeout: 10000 }).catch(() => {});
+                } catch {}
+                return res.status(202).json({ success: true, suggestions: [], queued: true, message: 'Data for høringen er ikke klar endnu. Forvarmer i baggrunden – prøv igen om lidt.' });
+            }
         }
         if (!responses.length) {
             return res.json({ success: true, suggestions: [] });
@@ -3782,42 +3808,36 @@ app.post('/api/build-docx', express.json({ limit: '5mb' }), async (req, res) => 
         }
         const tmpDir = ensureTmpDir();
         const outPath = path.join(tmpDir, `${outFileName || 'output'}.docx`);
-
+        // Prefer Python path
         const python = process.env.PYTHON_BIN || 'python3';
-        // Use the Colab-aligned builder to match notebook behavior precisely
         const scriptPath = path.join(__dirname, 'scripts', 'build_docx.py');
-        // Use resolved template to avoid filename normalization issues (e.g., composed vs decomposed diacritics)
         const templateDocxPath = TEMPLATE_DOCX;
         const templateBlockPath = path.join(__dirname, 'templates', 'blok.md');
-        
-        const args = [
-            scriptPath, 
-            '--markdown', '-',  // Read from stdin
-            '--out', outPath, 
-            '--template', templateDocxPath,
-            '--template-block', templateBlockPath
-        ];
-        
-        const child = spawn(python, args, { stdio: ['pipe', 'pipe', 'pipe'] });
-        let stdout = '';
-        let stderr = '';
-        
-        // Write markdown to stdin
-        child.stdin.write(markdown);
-        child.stdin.end();
-        
-        child.stdout.on('data', d => { stdout += d.toString(); });
-        child.stderr.on('data', d => { stderr += d.toString(); });
-        child.on('close', (code) => {
-            if (code !== 0) {
-                console.error('DOCX build error:', stderr);
-                return res.status(500).json({ success: false, message: 'DOCX bygning fejlede', error: stderr || `exit ${code}` });
-            }
-            console.log('DOCX build output:', stdout);
+        const runPython = async () => new Promise((resolve, reject) => {
+            try {
+                const child = spawn(python, [
+                    scriptPath,
+                    '--markdown', '-',
+                    '--out', outPath,
+                    '--template', templateDocxPath,
+                    '--template-block', templateBlockPath
+                ], { stdio: ['pipe', 'pipe', 'pipe'] });
+                let stderr = '';
+                child.stdin.write(markdown);
+                child.stdin.end();
+                child.stderr.on('data', d => { stderr += d.toString(); });
+                child.on('error', err => reject(err));
+                child.on('close', code => code === 0 ? resolve(null) : reject(new Error(stderr || `exit ${code}`)));
+            } catch (e) { reject(e); }
+        });
+        try {
+            await runPython();
             res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
             res.setHeader('Content-Disposition', `attachment; filename="${path.basename(outPath)}"`);
-            fs.createReadStream(outPath).pipe(res);
-        });
+            return fs.createReadStream(outPath).pipe(res);
+        } catch (pyErr) {
+            return res.status(500).json({ success: false, message: 'DOCX bygning fejlede', error: String(pyErr && pyErr.message || pyErr) });
+        }
     } catch (e) {
         res.status(500).json({ success: false, message: 'Fejl ved DOCX bygning', error: e.message });
     }
