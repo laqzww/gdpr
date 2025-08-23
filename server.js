@@ -42,6 +42,10 @@ const CLASSIFY_INTERNAL_TIMEOUT_MS = Number(process.env.CLASSIFY_INTERNAL_TIMEOU
 const SUMMARIZE_TIMEOUT_MS = Number(process.env.SUMMARIZE_TIMEOUT_MS || 1500000);
 // Warmup configuration
 const WARM_ALL_ON_START = String(process.env.WARM_ALL_ON_START || '').toLowerCase() === 'true';
+// Node HTTP server timeouts (tuned for SSE and long background jobs). Defaults chosen to avoid premature disconnects
+const SERVER_KEEP_ALIVE_TIMEOUT_MS = Number(process.env.SERVER_KEEP_ALIVE_TIMEOUT_MS || 65000);
+const SERVER_HEADERS_TIMEOUT_MS = Number(process.env.SERVER_HEADERS_TIMEOUT_MS || 66000);
+const SERVER_REQUEST_TIMEOUT_MS = Number(process.env.SERVER_REQUEST_TIMEOUT_MS || 0); // 0 disables request timeout
 const WARM_CONCURRENCY = Math.max(1, Number(process.env.WARM_CONCURRENCY || 2));
 const WARM_MAX_HEARINGS = Number(process.env.WARM_MAX_HEARINGS || 0); // 0 = no limit
 const WARM_RETRY_ATTEMPTS = Math.max(1, Number(process.env.WARM_RETRY_ATTEMPTS || 2));
@@ -518,7 +522,7 @@ async function buildPromptFromInput(hearingId, input) {
     let hearing = input?.hearing || null;
     let responses = Array.isArray(input?.responses) ? input.responses : null;
     let materials = Array.isArray(input?.materials) ? input.materials : null;
-    const base = `http://localhost:${PORT}`;
+    const base = (process.env.PUBLIC_URL || '').trim() || `http://localhost:${PORT}`;
     if (!hearing || !responses || !materials) {
         try {
             const r = await axios.get(`${(process.env.PUBLIC_URL || '').trim() || `http://localhost:${PORT}`}/api/hearing/${hearingId}?persist=1`, { validateStatus: () => true, timeout: INTERNAL_API_TIMEOUT_MS });
@@ -657,10 +661,12 @@ async function runJob(jobId, hearingId, input) {
                             try {
                                 const stream = await openai.responses.stream({ response_id: v.response_id });
                                 let acc = '';
+                                const startedAt = Date.now();
                                 for await (const ev of stream) {
                                     if (ev?.type === 'response.output_text.delta') acc += (ev.delta || '');
+                                    if (Date.now() - startedAt > 9.5 * 60 * 1000) break;
                                 }
-                                text = acc || text;
+                                if (acc && acc.length > (text||'').length) text = acc;
                             } catch {}
                         }
                         const headings = extractHeadingsFromMarkdown(text);
@@ -3388,7 +3394,7 @@ app.post('/api/summarize/:id', express.text({ type: 'application/json', limit: '
                             sendEvent('status', { id: i, phase: 'preparing', message: 'Forbereder variant…' });
                         }
                     } catch (_) {}
-                    const base = `http://localhost:${PORT}`;
+                    const base = (process.env.PUBLIC_URL || '').trim() || `http://localhost:${PORT}`;
                     let secs = 0;
                     const ticker = setInterval(() => { secs += 2; try { sendEvent('info', { message: `Henter høringsdata… (${secs}s)` }); } catch {} }, 2000);
                     const metaResp = await axios.get(`${base}/api/hearing/${hearingId}?persist=1`, { validateStatus: () => true, timeout: INTERNAL_API_TIMEOUT_MS });
@@ -4002,7 +4008,13 @@ app.post('/api/prefetch/:id', async (req, res) => {
     }
 });
 
-app.listen(PORT, () => {
+// Create HTTP server explicitly to control keepAlive and header timeouts (helps SSE on some proxies)
+const server = http.createServer(app);
+try { server.keepAliveTimeout = SERVER_KEEP_ALIVE_TIMEOUT_MS; } catch {}
+try { server.headersTimeout = SERVER_HEADERS_TIMEOUT_MS; } catch {}
+try { if (typeof server.requestTimeout !== 'undefined') server.requestTimeout = SERVER_REQUEST_TIMEOUT_MS; } catch {}
+
+server.listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`);
     
     // Warm search index after server is listening

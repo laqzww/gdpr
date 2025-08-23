@@ -1,6 +1,70 @@
 const path = require('path');
+const { spawnSync } = require('child_process');
 let Database;
-try { Database = require('better-sqlite3'); } catch (_) { Database = null; }
+
+function tryRequireBetterSqlite3() {
+    try { return require('better-sqlite3'); } catch (e) { return e; }
+}
+
+function needsRebuild(error) {
+    const msg = String((error && error.message) || error || '').toLowerCase();
+    return (
+        msg.includes('node_module_version') ||
+        msg.includes('was compiled against a different node.js version') ||
+        msg.includes('invalid or incompatible binary')
+    );
+}
+
+function detectProjectRootFromError(error) {
+    try {
+        const msg = String((error && error.message) || '');
+        const marker = '/node_modules/better-sqlite3/';
+        const idx = msg.indexOf(marker);
+        if (idx > 0) {
+            const prefix = msg.slice(0, idx);
+            const rootIdx = prefix.lastIndexOf('/');
+            const root = prefix.slice(0, rootIdx);
+            if (root && root.startsWith('/')) return root;
+        }
+    } catch {}
+    return null;
+}
+
+function attemptRebuildOnce(hintError) {
+    try {
+        if (attemptRebuildOnce._did) return;
+        attemptRebuildOnce._did = true;
+        const hinted = detectProjectRootFromError(hintError);
+        const cwd = hinted || process.cwd();
+        const env = { ...process.env, npm_config_build_from_source: 'true' };
+        // Best-effort: rebuild native module for the current Node runtime
+        spawnSync('npm', ['rebuild', 'better-sqlite3', '--build-from-source'], {
+            cwd,
+            env,
+            stdio: 'inherit'
+        });
+    } catch (_) { /* ignore */ }
+}
+
+(() => {
+    const first = tryRequireBetterSqlite3();
+    if (first && typeof first === 'object' && first.name) {
+        // Received an Error instance
+        if (needsRebuild(first) && process.env.ALLOW_RUNTIME_SQLITE_REBUILD !== '0') {
+            // Try to rebuild then require again
+            attemptRebuildOnce(first);
+            const second = tryRequireBetterSqlite3();
+            if (typeof second === 'function' || (second && second.open)) {
+                Database = second;
+                return;
+            }
+        }
+        Database = null;
+    } else {
+        // Successfully required the module
+        Database = first;
+    }
+})();
 
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, '..', 'data', 'app.sqlite');
 

@@ -1740,8 +1740,12 @@
                 }
             } catch (_) {}
 
-            // Use fetch-based SSE parsing with POST body (optimized path already implemented below)
-            startSummarizeViaFetch(lastFetched.hearing.id);
+            // Prefer resilient background job API with JSON polling to avoid long-lived SSE timeouts on proxies
+            const hearingId = lastFetched.hearing.id;
+            startSummarizeViaJobs(hearingId).catch(() => {
+                // Fallback to streaming if jobs API is unavailable
+                startSummarizeViaFetch(hearingId);
+            });
         }
 
         // Helper: set status text for a specific variant, ensuring ticker exists
@@ -2216,6 +2220,98 @@
             } catch (_) {
                 showError('Kunne ikke oprette forbindelse (fallback).');
             }
+        }
+
+        // Background jobs API: create job then poll JSON status until completion
+        async function startSummarizeViaJobs(hearingId) {
+            const progressEl = document.getElementById('genProgress2');
+            function setProgress(msg) { try { if (progressEl) progressEl.textContent = msg; } catch {} }
+            // Build minimal respondent overrides (same logic as streaming path)
+            let bodyData = { n: 3 };
+            try {
+                if (lastFetched && lastFetched.hearing && typeof loadEdits === 'function') {
+                    const editsMap = await loadEdits(lastFetched.hearing.id);
+                    const overrides = {};
+                    const responses = Array.isArray(lastFetched.responses) ? lastFetched.responses : [];
+                    for (const r of responses) {
+                        const idStr = String(r.id);
+                        const isIncluded = includeState && includeState.responses ? (includeState.responses.get(r.id) !== false) : true;
+                        if (!isIncluded) continue;
+                        const saved = editsMap[idStr] || editsMap[r.id];
+                        const rnSaved = saved && typeof saved.respondentName === 'string' ? saved.respondentName.trim() : '';
+                        const rtSaved = saved && typeof saved.respondentType === 'string' ? saved.respondentType : null;
+                        let rnToSend = '';
+                        if (rnSaved) rnToSend = rnSaved; else if (typeof r.respondentName === 'string' && r.respondentName.trim() === 'Borger') rnToSend = 'Borger';
+                        if (rnToSend || rtSaved) {
+                            overrides[idStr] = {};
+                            if (rnToSend) overrides[idStr].respondentName = rnToSend;
+                            if (rtSaved) overrides[idStr].respondentType = rtSaved;
+                        }
+                    }
+                    if (Object.keys(overrides).length) bodyData.edits = overrides;
+                }
+            } catch {}
+            setProgress('Opretter baggrundsjob…');
+            const createResp = await fetch(`/api/jobs/summarize/${encodeURIComponent(hearingId)}`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(bodyData)
+            });
+            const created = await createResp.json().catch(()=>({ success:false }));
+            if (!created || !created.success || !created.jobId) throw new Error('Job kunne ikke oprettes');
+            const jobId = created.jobId;
+            const pollMs = Number(created.recommendedPoll || 2000);
+            const seenVariants = new Set();
+            const startedAt = Date.now();
+            function updateGlobalTicker() {
+                const secs = Math.round((Date.now() - startedAt) / 1000);
+                broadcastGlobalStatus(`Arbejder… (${secs}s)`);
+            }
+            let ticker = setInterval(updateGlobalTicker, 5000);
+            updateGlobalTicker();
+
+            async function pollOnce() {
+                const r = await fetch(`/api/jobs/${encodeURIComponent(jobId)}`);
+                const j = await r.json().catch(()=>({ success:false }));
+                if (!j || !j.success) throw new Error('Jobstatus kunne ikke hentes');
+                setProgress(`Status: ${j.state || ''}`);
+                if (Array.isArray(j.variants)) {
+                    for (const v of j.variants) {
+                        if (v && Number.isFinite(v.id)) {
+                            if (v.phase || v.state) setVariantStatusText(v.id, (v.phase || v.state || '').toString());
+                            if (v.done && !seenVariants.has(v.id)) {
+                                try {
+                                    const r2 = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/variant/${encodeURIComponent(v.id)}`);
+                                    const j2 = await r2.json().catch(()=>({ success:false }));
+                                    if (j2 && j2.success) {
+                                        const variantObj = { id: v.id, markdown: j2.markdown || '', summary: j2.summary || '', headings: j2.headings || [] };
+                                        lastSummaries.push(variantObj);
+                                        renderSummaryVariants(lastSummaries);
+                                        seenVariants.add(v.id);
+                                    }
+                                } catch {}
+                            }
+                        }
+                    }
+                }
+                if (j.state === 'completed') {
+                    clearInterval(loop);
+                    clearInterval(ticker);
+                    try { document.getElementById('genProgress').style.display = 'none'; } catch {}
+                    showSuccess('Færdig! Vælg den bedste opsummering og download som DOCX.');
+                    return true;
+                }
+                if (j.state === 'failed' || j.state === 'cancelled') {
+                    clearInterval(loop);
+                    clearInterval(ticker);
+                    showError('Job fejlede/blev annulleret.');
+                    return true;
+                }
+                return false;
+            }
+            // Initial immediate poll, then interval
+            try { const done = await pollOnce(); if (done) return; } catch {}
+            const loop = setInterval(async () => {
+                try { const done = await pollOnce(); if (done) { clearInterval(loop); } } catch (e) { /* keep polling */ }
+            }, pollMs);
         }
 
         function renderSummaryVariants(variants) {
