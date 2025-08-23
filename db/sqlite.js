@@ -74,7 +74,22 @@ function init() {
     if (!Database) {
         throw new Error('better-sqlite3 is not installed');
     }
-    db = new Database(DB_PATH);
+    // Attempt to open DB; if ABI mismatch occurs at instantiation, try a one-time rebuild
+    try {
+        db = new Database(DB_PATH);
+    } catch (e) {
+        if (needsRebuild(e) && process.env.ALLOW_RUNTIME_SQLITE_REBUILD !== '0') {
+            attemptRebuildOnce(e);
+            const re = tryRequireBetterSqlite3();
+            if (typeof re === 'function' || (re && re.open)) {
+                Database = re;
+            }
+            // Retry once after rebuild
+            db = new Database(DB_PATH);
+        } else {
+            throw e;
+        }
+    }
     try { db.pragma('journal_mode = WAL'); } catch (_) {}
     db.exec(`
         CREATE TABLE IF NOT EXISTS hearings(

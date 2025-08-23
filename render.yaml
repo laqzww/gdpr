@@ -16,6 +16,7 @@ services:
       bash -lc "mkdir -p data/uploads tmp &&
       rm -rf uploads &&
       ln -s data/uploads uploads &&
+      npm rebuild better-sqlite3 --build-from-source || true &&
       node server.js"
     healthCheckPath: /healthz
     envVars:
