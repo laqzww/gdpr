@@ -72,26 +72,32 @@ self.addEventListener('fetch', event => {
 		return;
 	}
 
-	// Handle API requests (network-first, cache on success, fallback to cache)
+	// Handle API requests (network-first, cache on success, robust fallback)
 	if (url.pathname.startsWith('/api/')) {
 		// Skip caching for POST requests
 		if (request.method === 'POST') {
 			event.respondWith(fetch(request));
 			return;
 		}
-		
-		event.respondWith(
-			caches.open(API_CACHE_NAME).then(cache => {
-				return fetch(request)
-					.then(response => {
-						if (response && response.status === 200) {
-							cache.put(request, response.clone());
-						}
-						return response;
-					})
-					.catch(() => cache.match(request));
-			})
-		);
+
+		// Network-first with structured fallback when both network and cache miss
+		event.respondWith((async () => {
+			const cache = await caches.open(API_CACHE_NAME);
+			try {
+				const response = await fetch(request);
+				// Avoid caching explicit nocache requests
+				if (response && response.status === 200 && url.searchParams.get('nocache') !== '1') {
+					cache.put(request, response.clone());
+				}
+				return response;
+			} catch (err) {
+				const cached = await cache.match(request);
+				if (cached) return cached;
+				const wantsJson = (request.headers.get('accept') || '').includes('application/json');
+				const body = wantsJson ? JSON.stringify({ success: false, message: 'Netværk fejlede eller timeout', error: (err && err.name) || 'FetchError' }) : 'Gateway Timeout';
+				return new Response(body, { status: 504, headers: { 'Content-Type': wantsJson ? 'application/json' : 'text/plain' } });
+			}
+		})());
 		return;
 	}
 

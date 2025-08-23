@@ -22,7 +22,7 @@ services:
       - key: NODE_ENV
         value: production
       - key: NODE_VERSION
-        value: 20.12.2
+        value: 22.11.0
       - key: PIP_USER
         value: "0"
       - key: PYTHONPATH
@@ -41,6 +41,10 @@ services:
         value: "true"
       - key: NODE_OPTIONS
         value: "--enable-source-maps --max-old-space-size=768"
+      - key: NEXT_DATA_MAX_BYTES
+        value: "2500000"
+      - key: WARM_CONCURRENCY
+        value: "1"
       - key: PUBLIC_URL
         value: "https://blivhort-ai.onrender.com"
       - key: SESSION_SECRET
