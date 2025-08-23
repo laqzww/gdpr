@@ -865,6 +865,31 @@
         ];
         const approvedSteps = { 1: false, 2: false };
 
+        // Fetch with timeout helper to avoid indefinite hangs on slow backends
+        async function fetchWithTimeout(resource, options = {}, timeoutMs = 20000) {
+            const controller = new AbortController();
+            const timerId = setTimeout(() => { try { controller.abort(); } catch {} }, timeoutMs);
+            try {
+                const resp = await fetch(resource, { ...options, signal: controller.signal });
+                return resp;
+            } finally {
+                clearTimeout(timerId);
+            }
+        }
+
+        // Fast metadata fetch to render header quickly while full data loads
+        async function fetchMetaFast(hearingId) {
+            try {
+                const t = Date.now();
+                const r = await fetchWithTimeout(`/api/hearing/${encodeURIComponent(hearingId)}/meta?t=${t}`, { cache: 'no-cache', headers: { 'Cache-Control': 'no-cache' } }, 6000);
+                const j = await r.json().catch(()=>({}));
+                if (j && j.success && j.hearing) {
+                    lastFetched.hearing = j.hearing;
+                    displayHearingInfo(j.hearing);
+                }
+            } catch {}
+        }
+
         // Get hearing ID from URL parameter
         function getHearingIdFromUrl() {
             const params = new URLSearchParams(window.location.search);
@@ -988,10 +1013,16 @@
                     }
                 } catch {}
 
-                // Still nothing: fall back to network with overlay
+                // Still nothing: fall back to network; render header ASAP and load rest in background
                 shouldShowOverlay = true;
                 if (shouldShowOverlay) showLoading(true);
-                await fetchFreshData(hearingId, false);
+                // Try to fetch lightweight meta quickly to show page header
+                try { await fetchMetaFast(hearingId); } catch {}
+                // Hide overlay now; full data will update UI when ready
+                showLoading(false);
+                // Load full data in background and update UI when ready
+                fetchFreshData(hearingId, false).catch(() => {});
+                return;
             } catch (error) {
                 showError('Netværksfejl. Tjek venligst din internetforbindelse og prøv igen.');
                 console.error('Error:', error);
@@ -1003,12 +1034,12 @@
             try {
                 const timestamp = new Date().getTime();
                 const preferPersist = true;
-                const response = await fetch(`/api/hearing/${hearingId}?t=${timestamp}${preferPersist?'&persist=1':''}`, {
+                const response = await fetchWithTimeout(`/api/hearing/${hearingId}?t=${timestamp}${preferPersist?'&persist=1':''}`, {
                     cache: 'no-cache',
                     headers: {
                         'Cache-Control': 'no-cache'
                     }
-                });
+                }, 25000);
                 const data = await response.json();
 
                 if (data.success) {
@@ -1062,10 +1093,10 @@
             try {
                 const timestamp = new Date().getTime();
                 const preferPersist = true;
-                const r = await fetch(`/api/hearing/${hearingId}/materials?t=${timestamp}${preferPersist?'&persist=1':''}`, { 
+                const r = await fetchWithTimeout(`/api/hearing/${hearingId}/materials?t=${timestamp}${preferPersist?'&persist=1':''}`, { 
                     cache: 'no-cache', 
                     headers: { 'Cache-Control': 'no-cache' } 
-                });
+                }, 20000);
                 const json = await r.json();
                 if (json && json.success && Array.isArray(json.materials)) {
                     lastFetched.materials = json.materials;
@@ -1090,14 +1121,14 @@
             }
             try {
                 const t = Date.now();
-                const resp = await fetch(`/api/hearing/${hearingId}?nocache=1&t=${t}`, { cache: 'no-cache', headers: { 'Cache-Control': 'no-cache' } });
+                const resp = await fetchWithTimeout(`/api/hearing/${hearingId}?nocache=1&t=${t}`, { cache: 'no-cache', headers: { 'Cache-Control': 'no-cache' } }, 25000);
                 const data = await resp.json();
                 if (data && data.success) {
                     lastFetched = { hearing: data.hearing, responses: data.responses, materials: [] };
                     applySavedEdits();
                     displayHearingInfo(data.hearing);
                     // Refresh materials too from network
-                    const r2 = await fetch(`/api/hearing/${hearingId}/materials?nocache=1&t=${t}`, { cache: 'no-cache', headers: { 'Cache-Control': 'no-cache' } });
+                    const r2 = await fetchWithTimeout(`/api/hearing/${hearingId}/materials?nocache=1&t=${t}`, { cache: 'no-cache', headers: { 'Cache-Control': 'no-cache' } }, 20000);
                     const j2 = await r2.json().catch(()=>({}));
                     if (j2 && j2.success && Array.isArray(j2.materials)) {
                         lastFetched.materials = j2.materials;
