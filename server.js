@@ -40,6 +40,11 @@ const INTERNAL_API_TIMEOUT_MS = Number(process.env.INTERNAL_API_TIMEOUT_MS || 15
 const CLASSIFY_INTERNAL_TIMEOUT_MS = Number(process.env.CLASSIFY_INTERNAL_TIMEOUT_MS || 60000);
 // Max time the summarization SSE should be allowed to run (25 minutes default)
 const SUMMARIZE_TIMEOUT_MS = Number(process.env.SUMMARIZE_TIMEOUT_MS || 1500000);
+// Warmup configuration
+const WARM_ALL_ON_START = String(process.env.WARM_ALL_ON_START || '').toLowerCase() === 'true';
+const WARM_CONCURRENCY = Math.max(1, Number(process.env.WARM_CONCURRENCY || 2));
+const WARM_MAX_HEARINGS = Number(process.env.WARM_MAX_HEARINGS || 0); // 0 = no limit
+const WARM_RETRY_ATTEMPTS = Math.max(1, Number(process.env.WARM_RETRY_ATTEMPTS || 2));
 // Background mode default
 function parseBoolean(value) {
     const v = String(value || '').trim().toLowerCase();
@@ -3879,7 +3884,7 @@ app.get('/healthz', (req, res) => res.status(200).json({ status: 'ok' }));
 app.post('/api/prefetch/:id', async (req, res) => {
     try {
         const hearingId = String(req.params.id).trim();
-        const base = `http://localhost:${PORT}`;
+        const base = (process.env.PUBLIC_URL || '').trim() || `http://localhost:${PORT}`;
         const [agg, resps, mats] = await Promise.all([
             axios.get(`${base}/api/hearing/${hearingId}?nocache=1`, { validateStatus: () => true }),
             axios.get(`${base}/api/hearing/${hearingId}/responses?nocache=1`, { validateStatus: () => true }),
@@ -3911,6 +3916,35 @@ app.listen(PORT, () => {
     warmHearingIndex().catch((err) => {
         console.error('Error warming hearing index on startup:', err.message);
     });
+    // Optional: warm all hearings + materials upfront to avoid user waits
+    if (WARM_ALL_ON_START) {
+        (async () => {
+            try {
+                const items = Array.isArray(hearingIndex) ? hearingIndex.slice() : [];
+                const max = Number.isFinite(WARM_MAX_HEARINGS) && WARM_MAX_HEARINGS > 0 ? Math.min(items.length, WARM_MAX_HEARINGS) : items.length;
+                const queue = items.slice(0, max).map(h => h.id).filter(id => Number.isFinite(id));
+                let active = 0;
+                let idx = 0;
+                const next = async () => {
+                    if (idx >= queue.length) return;
+                    const id = queue[idx++];
+                    active++;
+                    const base = (process.env.PUBLIC_URL || '').trim() || `http://localhost:${PORT}`;
+                    const fetchOnce = async () => {
+                        try { await axios.get(`${base}/api/hearing/${id}?persist=1`, { validateStatus: () => true, timeout: INTERNAL_API_TIMEOUT_MS }); } catch {}
+                        try { await axios.get(`${base}/api/hearing/${id}/materials?persist=1`, { validateStatus: () => true, timeout: INTERNAL_API_TIMEOUT_MS }); } catch {}
+                    };
+                    let attempts = 0;
+                    while (attempts < WARM_RETRY_ATTEMPTS) { attempts++; await fetchOnce(); }
+                    active--;
+                    if (idx < queue.length) next();
+                };
+                for (let i = 0; i < Math.min(WARM_CONCURRENCY, queue.length); i++) next();
+            } catch (e) {
+                console.warn('Warm all on start failed:', e.message);
+            }
+        })();
+    }
     // Periodic refresh to keep index robust
     const refreshMs = Number(process.env.INDEX_REFRESH_MS || (6 * 60 * 60 * 1000));
     if (Number.isFinite(refreshMs) && refreshMs > 0) {
