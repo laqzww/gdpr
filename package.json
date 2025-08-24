@@ -8,6 +8,9 @@
         "test": "echo \"Error: no test specified\" && exit 1",
         "postinstall": "node -e \"try{const D=require('better-sqlite3');new D(':memory:');process.exit(0)}catch(e){process.exit(1)}\" || npm rebuild better-sqlite3 --update-binary || true",
         "start": "node server.js",
+        "prefetch:open": "curl -s -X POST http://localhost:$PORT/api/refresh/open | cat",
+        "rebuild:index": "curl -s -X POST http://localhost:$PORT/api/rebuild-index | cat",
+        "prefetch:id": "node -e \"(async()=>{const id=process.argv[1];const base=process.env.PUBLIC_URL||'http://localhost:'+process.env.PORT;const axios=require('axios');const u=base+'/api/prefetch/'+id+'?apiOnly=1';const r=await axios.post(u,{reason:'cli'},{validateStatus:()=>true}).catch(e=>({status:0,data:{error:e.message}}));console.log(JSON.stringify(r.data||{},null,2));})().catch(e=>{console.error(e);process.exit(1);})\"",
         "dev": "node --watch server.js"
     },
     "keywords": [],

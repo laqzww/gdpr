@@ -57,6 +57,15 @@ const SERVER_REQUEST_TIMEOUT_MS = Number(process.env.SERVER_REQUEST_TIMEOUT_MS |
 const WARM_CONCURRENCY = Math.max(1, Number(process.env.WARM_CONCURRENCY || 2));
 const WARM_MAX_HEARINGS = Number(process.env.WARM_MAX_HEARINGS || 0); // 0 = no limit
 const WARM_RETRY_ATTEMPTS = Math.max(1, Number(process.env.WARM_RETRY_ATTEMPTS || 2));
+// Prefer API-only prefetcher (avoids heavy HTML scraping) for cron/warm paths
+const API_ONLY_PREFETCH = parseBoolean(process.env.API_ONLY_PREFETCH || 'false');
+const WARM_MIN_INTERVAL_MS = Math.max(0, Number(process.env.WARM_MIN_INTERVAL_MS || 120000));
+const PREFETCH_CONCURRENCY = Math.max(1, Number(process.env.PREFETCH_CONCURRENCY || 2));
+const PREFETCH_MIN_INTERVAL_MS = Math.max(0, Number(process.env.PREFETCH_MIN_INTERVAL_MS || 10*60*1000));
+
+// In-memory guards to avoid thrashing
+const lastWarmAt = new Map(); // hearingId -> ts
+const prefetchInFlight = new Set(); // hearingId currently prefetching
 // Background mode default
 function parseBoolean(value) {
     const v = String(value || '').trim().toLowerCase();
@@ -2466,10 +2475,25 @@ app.post('/api/warm/:id', async (req, res) => {
     try {
         const hearingId = String(req.params.id).trim();
         logDebug(`[warm] queue id=${hearingId}`);
-        // Fire-and-forget: trigger internal fetches without waiting for completion
+        // Prefer lightweight API-only prefetcher to avoid heavy HTML scraping when warming
+        const base = (process.env.PUBLIC_URL || '').trim() || `http://localhost:${PORT}`;
+        const now = Date.now();
+        const last = lastWarmAt.get(hearingId) || 0;
+        if (now - last < WARM_MIN_INTERVAL_MS) {
+            return res.json({ success: true, queued: false, skipped: true, reason: 'debounced' });
+        }
+        lastWarmAt.set(hearingId, now);
         (async () => {
-            try { await axios.get(`http://localhost:${PORT}/api/hearing/${encodeURIComponent(hearingId)}?nocache=1`, { validateStatus: () => true, timeout: 120000 }); } catch (e) { logDebug(`[warm] hearing fetch failed id=${hearingId} ${e && e.message}`); }
-            try { await axios.get(`http://localhost:${PORT}/api/hearing/${encodeURIComponent(hearingId)}/materials?nocache=1`, { validateStatus: () => true, timeout: 120000 }); } catch (e) { logDebug(`[warm] materials fetch failed id=${hearingId} ${e && e.message}`); }
+            try {
+                if (API_ONLY_PREFETCH) {
+                    await axios.post(`${base}/api/prefetch/${encodeURIComponent(hearingId)}?apiOnly=1`, { reason: 'warm' }, { validateStatus: () => true, timeout: INTERNAL_API_TIMEOUT_MS });
+                } else {
+                    await axios.get(`${base}/api/hearing/${encodeURIComponent(hearingId)}?persist=1&nocache=1`, { validateStatus: () => true, timeout: INTERNAL_API_TIMEOUT_MS });
+                    await axios.get(`${base}/api/hearing/${encodeURIComponent(hearingId)}/materials?persist=1&nocache=1`, { validateStatus: () => true, timeout: INTERNAL_API_TIMEOUT_MS });
+                }
+            } catch (e) {
+                logDebug(`[warm] hearing prefetch failed id=${hearingId} ${e && e.message}`);
+            }
         })();
         res.json({ success: true, queued: true });
     } catch (e) {
@@ -4011,25 +4035,56 @@ app.post('/api/prefetch/:id', async (req, res) => {
     try {
         const hearingId = String(req.params.id).trim();
         const base = (process.env.PUBLIC_URL || '').trim() || `http://localhost:${PORT}`;
-        const [agg, resps, mats] = await Promise.all([
-            axios.get(`${base}/api/hearing/${hearingId}?nocache=1`, { validateStatus: () => true }),
-            axios.get(`${base}/api/hearing/${hearingId}/responses?nocache=1`, { validateStatus: () => true }),
-            axios.get(`${base}/api/hearing/${hearingId}/materials?nocache=1`, { validateStatus: () => true })
-        ]);
-        let payload = null;
-        if (agg.status === 200 && agg.data && agg.data.success) payload = agg.data;
-        else if (resps.status === 200 && mats.status === 200 && resps.data && mats.data) {
-            payload = {
-                success: true,
-                hearing: { id: Number(hearingId) },
-                responses: Array.isArray(resps.data.responses) ? resps.data.responses : [],
-                materials: Array.isArray(mats.data.materials) ? mats.data.materials : []
-            };
+        const apiOnly = String(req.query.apiOnly || '').trim() === '1' || API_ONLY_PREFETCH;
+        if (prefetchInFlight.has(hearingId)) {
+            return res.json({ success: true, skipped: true, reason: 'in-flight' });
         }
-        if (!payload) return res.status(500).json({ success: false, message: 'Kunne ikke hente data' });
+        prefetchInFlight.add(hearingId);
+        let payload = null;
+        if (apiOnly) {
+            // Use API-only routes to avoid HTML scraping for cron/prefetch
+            const [metaResp, resps, mats] = await Promise.all([
+                axios.get(`${base}/api/hearing/${hearingId}?persist=1`, { validateStatus: () => true, timeout: INTERNAL_API_TIMEOUT_MS }),
+                axios.get(`${base}/api/hearing/${hearingId}/responses?nocache=1`, { validateStatus: () => true, timeout: INTERNAL_API_TIMEOUT_MS }),
+                axios.get(`${base}/api/hearing/${hearingId}/materials?nocache=1`, { validateStatus: () => true, timeout: INTERNAL_API_TIMEOUT_MS })
+            ]);
+            if (metaResp.status === 200 && metaResp.data && metaResp.data.success) {
+                payload = {
+                    success: true,
+                    hearing: metaResp.data.hearing,
+                    responses: Array.isArray(resps?.data?.responses) ? resps.data.responses : [],
+                    materials: Array.isArray(mats?.data?.materials) ? mats.data.materials : [],
+                    totalPages: metaResp.data.totalPages || undefined
+                };
+            }
+        } else {
+            const [agg, resps, mats] = await Promise.all([
+                axios.get(`${base}/api/hearing/${hearingId}?nocache=1`, { validateStatus: () => true, timeout: INTERNAL_API_TIMEOUT_MS }),
+                axios.get(`${base}/api/hearing/${hearingId}/responses?nocache=1`, { validateStatus: () => true, timeout: INTERNAL_API_TIMEOUT_MS }),
+                axios.get(`${base}/api/hearing/${hearingId}/materials?nocache=1`, { validateStatus: () => true, timeout: INTERNAL_API_TIMEOUT_MS })
+            ]);
+            if (agg.status === 200 && agg.data && agg.data.success) payload = agg.data;
+            else if (resps.status === 200 && mats.status === 200 && resps.data && mats.data) {
+                payload = {
+                    success: true,
+                    hearing: { id: Number(hearingId) },
+                    responses: Array.isArray(resps.data.responses) ? resps.data.responses : [],
+                    materials: Array.isArray(mats.data.materials) ? mats.data.materials : []
+                };
+            }
+        }
+        if (!payload) { prefetchInFlight.delete(hearingId); return res.status(500).json({ success: false, message: 'Kunne ikke hente data' }); }
         writePersistedHearing(hearingId, payload);
+        // Also persist to SQLite for stable reads
+        try {
+            if (payload.hearing) upsertHearing(payload.hearing);
+            if (Array.isArray(payload.responses)) replaceResponses(hearingId, payload.responses);
+            if (Array.isArray(payload.materials)) replaceMaterials(hearingId, payload.materials);
+        } catch {}
+        prefetchInFlight.delete(hearingId);
         res.json({ success: true, message: 'Prefetch gemt', counts: { responses: payload.responses?.length || 0, materials: payload.materials?.length || 0 } });
     } catch (e) {
+        try { prefetchInFlight.delete(String(req.params.id).trim()); } catch {}
         res.status(500).json({ success: false, message: 'Prefetch-fejl', error: e.message });
     }
 });
@@ -4142,6 +4197,24 @@ server.listen(PORT, () => {
                 } catch {}
             });
 
+            // Optional: full API-only prefetch for all indexed hearings on a wider cadence
+            const prefetchSpec = resolveCronSpec(process.env.CRON_API_PREFETCH_SCHEDULE, '0 */12 * * *');
+            cron.schedule(prefetchSpec, async () => {
+                try {
+                    const items = Array.isArray(hearingIndex) ? hearingIndex.slice() : [];
+                    const ids = items.map(h => h.id).filter(x => Number.isFinite(x));
+                    let cursor = 0;
+                    const runners = new Array(Math.min(PREFETCH_CONCURRENCY, Math.max(1, ids.length))).fill(0).map(async () => {
+                        while (cursor < ids.length) {
+                            const my = ids[cursor++];
+                            try { await axios.post(`http://localhost:${PORT}/api/prefetch/${encodeURIComponent(my)}?apiOnly=1`, { reason: 'cron' }, { validateStatus: () => true, timeout: INTERNAL_API_TIMEOUT_MS }); } catch {}
+                            await sleep(200);
+                        }
+                    });
+                    await Promise.all(runners);
+                } catch {}
+            });
+
             // Jobs cleanup
             const jobCleanupSpec = resolveCronSpec(process.env.CRON_JOBS_CLEANUP, '12 * * * *');
             cron.schedule(jobCleanupSpec, () => {
@@ -4191,6 +4264,13 @@ function snapshotSignature(s) {
 }
 
 async function refreshHearingUntilStable(hearingId) {
+    // If API-only prefetch is enabled for cron, prefer that to reduce heavy scraping
+    if (API_ONLY_PREFETCH) {
+        try {
+            await axios.post(`${(process.env.PUBLIC_URL || '').trim() || `http://localhost:${PORT}`}/api/prefetch/${encodeURIComponent(hearingId)}?apiOnly=1`, { reason: 'refresh' }, { validateStatus: () => true, timeout: INTERNAL_API_TIMEOUT_MS });
+            return { success: true };
+        } catch {}
+    }
     const localBase = (process.env.PUBLIC_URL || '').trim() || `http://localhost:${PORT}`;
     let lastSig = '';
     let stableRepeats = 0;
