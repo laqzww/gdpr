@@ -2240,6 +2240,16 @@
                 const es = new EventSource(url);
                 window.__genEventSource = es;
                 const progressEl = document.getElementById('genProgress2');
+                // If GET SSE does not deliver any per-variant signals quickly, fall back to POST SSE
+                let gotVariantSignal = false;
+                const getSseRescue = setTimeout(() => {
+                    try {
+                        if (!gotVariantSignal && (!window.__summaryMode || window.__summaryMode !== 'jobs')) {
+                            // escalate to POST SSE fallback which uses server-side background jobs
+                            startSummarizeViaFetch(hearingId, { force: true });
+                        }
+                    } catch {}
+                }, 8000);
                 es.addEventListener('open', () => {
                     try {
                         window.__genTiming = window.__genTiming || { t0: performance.now() };
@@ -2281,6 +2291,7 @@
                     try {
                         const obj = JSON.parse(ev.data||'{}');
                         if (obj && obj.variant) {
+                            gotVariantSignal = true;
                             // Remove thinking ticker for this variant (completed)
                             const card = document.querySelector(`[data-variant-id="${obj.variant.id}"]`);
                             if (card) {
@@ -2323,6 +2334,7 @@
                         }
                         const card = obj && obj.id ? document.querySelector(`[data-variant-id="${obj.id}"]`) : null;
                         if (card) {
+                            gotVariantSignal = true;
                             const el = card.querySelector('.summary-status');
                             if (el) {
                                 const msg = obj.message || '';
@@ -2358,6 +2370,7 @@
                 });
                 es.addEventListener('error', ev => {
                     try { const obj = JSON.parse(ev.data||'{}'); showError((obj && obj.message) || 'Fejl under generering.'); } catch { showError('Fejl under generering.'); }
+                    try { clearTimeout(getSseRescue); } catch {}
                 });
                 es.addEventListener('end', () => {
                     showSuccess('Færdig! Vælg den bedste opsummering og download som DOCX.');
@@ -2367,11 +2380,38 @@
                     setTimeout(() => { document.getElementById('genProgress').style.display = 'none'; }, 500);
                     try { es.close(); } catch {}
                     try { if (window.__genEventSource === es) window.__genEventSource = null; } catch {}
+                    try { clearTimeout(getSseRescue); } catch {}
                 });
             } catch (_) {
                 showError('Kunne ikke oprette forbindelse (fallback).');
             }
         }
+
+        // Add a safety timer around the Jobs path to fail over if no variants arrive
+        (function augmentJobsFallback() {
+            const orig = startSummarizeViaJobs;
+            startSummarizeViaJobs = async function (hearingId) {
+                const p = orig.call(this, hearingId);
+                try {
+                    setTimeout(async () => {
+                        try {
+                            // If still in jobs mode and no variants arrived, escalate to GET SSE
+                            if (window.__summaryMode === 'jobs' && (!Array.isArray(lastSummaries) || lastSummaries.length === 0)) {
+                                try {
+                                    // Best-effort cancel of job if we have it
+                                    if (window.__currentJobId) {
+                                        fetch(`/api/jobs/${encodeURIComponent(window.__currentJobId)}`, { method: 'DELETE' }).catch(()=>{});
+                                    }
+                                } catch {}
+                                window.__summaryMode = 'sse';
+                                startSummarizeViaEventSource(hearingId, { force: true });
+                            }
+                        } catch {}
+                    }, 12000);
+                } catch {}
+                return p;
+            };
+        })();
 
         // Background jobs API: create job then poll JSON status until completion
         async function startSummarizeViaJobs(hearingId) {
