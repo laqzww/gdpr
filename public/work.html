@@ -2040,7 +2040,7 @@
                     if (progressEl) progressEl.textContent = `Forbundet til serveren (${dt} ms)…`;
                 }
                 // Fallback if totally stuck: give more room to avoid double streams (25s, 10s in demo)
-                const fallbackTimeoutMs = demoParam ? 10000 : 25000;
+                const fallbackTimeoutMs = demoParam ? 8000 : 10000;
                 fallbackTimer = setTimeout(() => {
                     if (!gotAnyVariant && !sseRetryAttempted) {
                         try { controller.abort(); } catch {}
@@ -2085,8 +2085,7 @@
                             }
                             if (Number.isFinite(vId) && vId >= 1 && vId <= 3) {
                                 setVariantStatusText(vId, obj.message || '');
-                                // Treat variant-targeted info as activity to avoid premature fallback
-                                markActivity();
+                                // Do not mark activity on generic info; wait for status/content
                             } else {
                                 // Do not treat generic info as activity; allow fallback to GET if no per-variant events arrive
                             }
@@ -2171,8 +2170,8 @@
                             if (card) {
                                 setVariantStatusText(obj.id, obj.message || `Status: ${obj.phase}`);
                                 const phase = String(obj.phase||'').toLowerCase();
-                                // Consider early phases activity as well (creating_job, polling)
-                                const isProgress = ['started','thinking','drafting','done','streaming','using-tools','preparing','connecting','queued','queueing','creating_job','polling'].includes(phase);
+                                // Only treat real progress phases as activity; allow fallback during early phases
+                                const isProgress = ['started','thinking','drafting','done','streaming','using-tools'].includes(phase);
                                 if (isProgress) markActivity();
                             } else {
                                 const progressEl = document.getElementById('genProgress2');
