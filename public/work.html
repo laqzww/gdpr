@@ -1894,14 +1894,13 @@
                 }
             } catch (_) {}
 
-            // Prefer resilient background job API with JSON polling to avoid long-lived SSE timeouts on proxies
+            // Prefer resilient background job API with JSON polling; if unavailable, fall back to POST SSE
             const hearingId = lastFetched.hearing.id;
-            // Mark active mode to prevent duplicate fallbacks
             try { window.__summaryMode = 'jobs'; } catch(_) {}
             startSummarizeViaJobs(hearingId).catch(() => {
-                // Fallback to direct GET SSE (no background job) if jobs API is unavailable
                 try { window.__summaryMode = 'sse'; } catch(_) {}
-                startSummarizeViaEventSource(hearingId, { force: true });
+                // Use POST SSE with compact body first to avoid long query strings being blocked
+                startSummarizeViaFetch(hearingId, { force: true });
             });
         }
 
@@ -1967,13 +1966,29 @@
                 if (fallbackTimer) { try { clearTimeout(fallbackTimer); } catch {} fallbackTimer = null; }
             }
             
-            // Avoid sending large bodies that freeze the UI; let server fetch data itself
-            // But include minimal respondent overrides from the wizard (name/type) so server uses edited values
-            const bodyData = {};
+            // Build compact body: include hearing/meta, selected materials, and included responses
+            // Keep payload modest by trimming fields and skipping defaults
+            const bodyData = { n: 3 };
+            try {
+                if (lastFetched && lastFetched.hearing) {
+                    bodyData.hearing = {
+                        id: lastFetched.hearing.id,
+                        title: lastFetched.hearing.title,
+                        deadline: lastFetched.hearing.deadline,
+                        status: lastFetched.hearing.status,
+                        url: lastFetched.hearing.url
+                    };
+                }
+            } catch {}
+            try {
+                const mats = await buildSelectedMaterialsPayload();
+                if (Array.isArray(mats) && mats.length) bodyData.materials = mats;
+            } catch {}
             try {
                 if (lastFetched && lastFetched.hearing && typeof loadEdits === 'function') {
                     const editsMap = await loadEdits(lastFetched.hearing.id) || {};
                     const overrides = {};
+                    const trimmedResponses = [];
                     const responses = Array.isArray(lastFetched.responses) ? lastFetched.responses : [];
                     for (const r of responses) {
                         const idStr = String(r.id);
@@ -1982,22 +1997,19 @@
                         const saved = editsMap[idStr] || editsMap[r.id];
                         const rnSaved = saved && typeof saved.respondentName === 'string' ? saved.respondentName.trim() : '';
                         const rtSaved = saved && typeof saved.respondentType === 'string' ? saved.respondentType : null;
-                        let rnToSend = '';
-                        if (rnSaved) {
-                            rnToSend = rnSaved;
-                        } else if (typeof r.respondentName === 'string' && r.respondentName.trim() === 'Borger') {
-                            // Ensure defaults remain 'Borger' on the server side (avoid UUID substitution)
-                            rnToSend = 'Borger';
-                        }
-                        if (rnToSend || rtSaved) {
+                        const effectiveName = rnSaved || (typeof r.respondentName === 'string' ? r.respondentName.trim() : '');
+                        const effectiveType = rtSaved || (typeof r.respondentType === 'string' ? r.respondentType : '');
+                        if ((rnSaved && rnSaved !== 'Borger') || (rtSaved && rtSaved !== 'Borger')) {
                             overrides[idStr] = {};
-                            if (rnToSend) overrides[idStr].respondentName = rnToSend;
-                            if (rtSaved) overrides[idStr].respondentType = rtSaved;
+                            if (rnSaved && rnSaved !== 'Borger') overrides[idStr].respondentName = rnSaved;
+                            if (rtSaved && rtSaved !== 'Borger') overrides[idStr].respondentType = rtSaved;
                         }
+                        // Build compact response payload (avoid sending unused fields)
+                        const txt = (r.text || '').slice(0, 8000);
+                        trimmedResponses.push({ id: r.id, text: txt, respondentName: effectiveName || 'Borger', respondentType: effectiveType || 'Borger' });
                     }
-                    if (Object.keys(overrides).length) {
-                        bodyData.edits = overrides;
-                    }
+                    if (trimmedResponses.length) bodyData.responses = trimmedResponses;
+                    if (Object.keys(overrides).length) bodyData.edits = overrides;
                 }
             } catch (_) {}
             
@@ -2225,7 +2237,8 @@
                 const demoParam = usp.get('demo');
                 const delayParam = usp.get('delay');
                 // Force direct streaming by default to avoid spawning extra background jobs
-                const bgPart = bgParam ? `&bg=${encodeURIComponent(bgParam)}` : '&bg=0';
+                // Prefer background jobs for resilience and shorter URLs
+                const bgPart = bgParam ? `&bg=${encodeURIComponent(bgParam)}` : '&bg=1';
                 const demoPart = demoParam ? `&demo=${encodeURIComponent(demoParam)}` : '';
                 const delayPart = delayParam ? `&delay=${encodeURIComponent(delayParam)}` : '';
                 // Prepare minimal respondent overrides for fallback GET as URL-encoded JSON
@@ -2242,16 +2255,11 @@
                             const saved = editsMap[idStr] || editsMap[r.id];
                             const rnSaved = saved && typeof saved.respondentName === 'string' ? saved.respondentName.trim() : '';
                             const rtSaved = saved && typeof saved.respondentType === 'string' ? saved.respondentType : null;
-                            let rnToSend = '';
-                            if (rnSaved) {
-                                rnToSend = rnSaved;
-                            } else if (typeof r.respondentName === 'string' && r.respondentName.trim() === 'Borger') {
-                                rnToSend = 'Borger';
-                            }
-                            if (rnToSend || rtSaved) {
+                            // Only include explicit changes away from default 'Borger'
+                            if ((rnSaved && rnSaved !== 'Borger') || (rtSaved && rtSaved !== 'Borger')) {
                                 overrides[idStr] = {};
-                                if (rnToSend) overrides[idStr].respondentName = rnToSend;
-                                if (rtSaved) overrides[idStr].respondentType = rtSaved;
+                                if (rnSaved && rnSaved !== 'Borger') overrides[idStr].respondentName = rnSaved;
+                                if (rtSaved && rtSaved !== 'Borger') overrides[idStr].respondentType = rtSaved;
                             }
                         }
                         if (Object.keys(overrides).length) {
@@ -2264,12 +2272,11 @@
                 const es = new EventSource(url);
                 window.__genEventSource = es;
                 const progressEl = document.getElementById('genProgress2');
-                // If GET SSE does not deliver any per-variant signals quickly, fall back to POST SSE
+                // If GET SSE does not deliver any per-variant signals quickly, fall back to POST SSE (compact body)
                 let gotVariantSignal = false;
                 const getSseRescue = setTimeout(() => {
                     try {
                         if (!gotVariantSignal && (!window.__summaryMode || window.__summaryMode !== 'jobs')) {
-                            // escalate to POST SSE fallback which uses server-side background jobs
                             startSummarizeViaFetch(hearingId, { force: true });
                         }
                     } catch {}

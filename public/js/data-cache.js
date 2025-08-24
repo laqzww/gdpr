@@ -29,52 +29,55 @@ class DataCache {
     }
 
     async _initIndexedDB() {
+        // Open the DB at its existing version; then upgrade if stores are missing
         return new Promise((resolve, reject) => {
-            // First, try opening without specifying a version to avoid VersionError
-            let triedUpgradeOpen = false;
-            const tryOpenNoVersion = () => {
-                try {
-                    const req = indexedDB.open(this.dbName);
-                    req.onerror = () => {
-                        // Some browsers may require a version; fall back to explicit versioned open
-                        if (!triedUpgradeOpen) { triedUpgradeOpen = true; tryOpenWithVersion(); return; }
-                        reject(req.error);
-                    };
-                    req.onsuccess = () => { this.db = req.result; resolve(); };
-                } catch (_) {
-                    // If open without version is not supported, fall back to versioned open
-                    tryOpenWithVersion();
+            let opened = false;
+            const req = indexedDB.open(this.dbName);
+            req.onerror = () => {
+                const err = req.error;
+                // If a VersionError occurs here (rare), fall back to opening with no explicit version change
+                if (err && err.name === 'VersionError') {
+                    try {
+                        const req2 = indexedDB.open(this.dbName);
+                        req2.onsuccess = () => { this.db = req2.result; resolve(); };
+                        req2.onerror = () => reject(req2.error || err);
+                        return;
+                    } catch (e) {
+                        return reject(e);
+                    }
                 }
+                reject(err);
             };
-            const tryOpenWithVersion = () => {
+            req.onsuccess = () => {
+                if (opened) return;
+                opened = true;
+                this.db = req.result;
+                // If required object stores are missing, perform a lightweight upgrade
+                const needsStores = (() => {
+                    try {
+                        const names = this.db.objectStoreNames || [];
+                        return !names.contains('searchIndex') || !names.contains('hearings') || !names.contains('responses') || !names.contains('materials');
+                    } catch (_) { return true; }
+                })();
+                if (!needsStores) return resolve();
+                // Upgrade path: bump version by +1 and create missing stores
                 try {
-                    const request = indexedDB.open(this.dbName, this.dbVersion);
-                    request.onerror = () => reject(request.error);
-                    request.onsuccess = () => { this.db = request.result; resolve(); };
-                    request.onupgradeneeded = (event) => {
+                    const currentVersion = Number(this.db.version || 1);
+                    this.db.close();
+                    const upgradeReq = indexedDB.open(this.dbName, currentVersion + 1);
+                    upgradeReq.onupgradeneeded = (event) => {
                         const db = event.target.result;
-                        // Store for search index
-                        if (!db.objectStoreNames.contains('searchIndex')) {
-                            db.createObjectStore('searchIndex', { keyPath: 'id' });
-                        }
-                        // Store for hearing details
-                        if (!db.objectStoreNames.contains('hearings')) {
-                            db.createObjectStore('hearings', { keyPath: 'id' });
-                        }
-                        // Store for hearing responses
-                        if (!db.objectStoreNames.contains('responses')) {
-                            db.createObjectStore('responses', { keyPath: 'hearingId' });
-                        }
-                        // Store for hearing materials
-                        if (!db.objectStoreNames.contains('materials')) {
-                            db.createObjectStore('materials', { keyPath: 'hearingId' });
-                        }
+                        try { if (!db.objectStoreNames.contains('searchIndex')) db.createObjectStore('searchIndex', { keyPath: 'id' }); } catch {}
+                        try { if (!db.objectStoreNames.contains('hearings')) db.createObjectStore('hearings', { keyPath: 'id' }); } catch {}
+                        try { if (!db.objectStoreNames.contains('responses')) db.createObjectStore('responses', { keyPath: 'hearingId' }); } catch {}
+                        try { if (!db.objectStoreNames.contains('materials')) db.createObjectStore('materials', { keyPath: 'hearingId' }); } catch {}
                     };
+                    upgradeReq.onsuccess = () => { this.db = upgradeReq.result; resolve(); };
+                    upgradeReq.onerror = () => reject(upgradeReq.error);
                 } catch (e) {
                     reject(e);
                 }
             };
-            tryOpenNoVersion();
         });
     }
 
