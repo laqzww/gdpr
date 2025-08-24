@@ -580,22 +580,14 @@ async function buildPromptFromInput(hearingId, input) {
     const promptTemplate = readTextFileSafe(PROMPT_PATH) || '# Opgave\nSkriv en tematiseret opsummering baseret på materialet.';
     const RESP_LIMIT = Number(process.env.RESP_CHAR_LIMIT || 200000);
     const MAT_LIMIT = Number(process.env.MAT_CHAR_LIMIT || 120000);
-    const repliesParts = ['# Samlede Høringssvar'];
-    for (const r of (responses||[])) {
-        repliesParts.push(`## Svar ${r.id}`);
-        const prefName = r.respondentnavn || r.respondentName;
-        const who = [prefName || r.author, r.organization && r.organization !== (prefName || r.author) ? r.organization : null].filter(Boolean).join(' ');
-        if (who || r.submittedAt) {
-            const parts = [];
-            if (who) parts.push(who);
-            if (r.submittedAt) parts.push(new Date(r.submittedAt).toISOString());
-            repliesParts.push(`- ${parts.join(' • ')}`);
-        }
-        repliesParts.push('');
-        repliesParts.push(r.text || '');
-        repliesParts.push('');
-    }
-    const repliesMd = repliesParts.join('\n');
+    // Build JSON array expected by wizard/UX with merged respondent fields
+    const repliesObjects = (responses || []).map(r => ({
+        svarnummer: (r && (r.svarnummer ?? r.id)) ?? null,
+        svartekst: (r && (r.svartekst ?? r.text ?? '')) || '',
+        respondentnavn: (r && (r.respondentnavn ?? r.respondentName ?? r.author ?? '')) || '',
+        respondenttype: (r && (r.respondenttype ?? r.respondentType ?? 'Borger')) || 'Borger'
+    }));
+    const repliesText = JSON.stringify(repliesObjects, null, 2);
     const materialParts = [`# Høringsmateriale for ${(hearing && hearing.title) || ''}`];
     for (const m of (materials||[])) {
         const kind = m.kind || m.type;
@@ -609,9 +601,10 @@ async function buildPromptFromInput(hearingId, input) {
             materialParts.push(`- ${m.title || 'Dokument'}: ${m.url}`);
         }
     }
-    const materialMd = materialParts.join('\n');
+    const materialText = materialParts.join('\n');
     const systemPrompt = 'Du er en erfaren dansk fuldmægtig. Følg instruktionerne præcist.';
-    const userPrompt = `${promptTemplate}\n\n# Samlede Høringssvar\n\n${repliesMd.slice(0, RESP_LIMIT)}\n\n# Høringsmateriale \n\n${materialMd.slice(0, MAT_LIMIT)}`;
+    // Use bracketed sections to align with streaming endpoints
+    const userPrompt = `${promptTemplate}\n\n[Samlede Høringssvar]\n\n${String(repliesText || '').slice(0, RESP_LIMIT)}\n\n[Høringsmateriale]\n\n${String(materialText || '').slice(0, MAT_LIMIT)}`;
     return { hearing, responses, materials, systemPrompt, userPrompt };
 }
 
@@ -2942,32 +2935,15 @@ app.get('/api/summarize/:id', async (req, res) => {
 
         // Stream immediate user-facing status while building prompt
         sendEvent('info', { message: 'Bygger materiale til prompt…' });
-        const repliesParts = ['# Samlede Høringssvar'];
-        for (const r of responses) {
-            repliesParts.push(`## Svar ${r.id}`);
-            // Prefer wizard-edited respondent name if available, then fallback to author/organization
-            const prefName = r.respondentnavn || r.respondentName;
-            const who = [prefName || r.author, r.organization && r.organization !== (prefName || r.author) ? r.organization : null].filter(Boolean).join(' ');
-            if (who || r.submittedAt) {
-                const parts = [];
-                if (who) parts.push(who);
-                if (r.submittedAt) parts.push(new Date(r.submittedAt).toISOString());
-                repliesParts.push(`- ${parts.join(' • ')}`);
-            }
-            repliesParts.push('');
-            repliesParts.push(r.text || '');
-            if (Array.isArray(r.attachments) && r.attachments.length) {
-                repliesParts.push('');
-                repliesParts.push('Bilag:');
-                for (const a of r.attachments) {
-                    const safeUrl = a.url ? `${base}/api/file-proxy?${new URLSearchParams({ path: a.url, filename: a.filename || 'Dokument' }).toString()}` : '';
-                    repliesParts.push(`- ${a.filename}: ${safeUrl || a.url || ''}`);
-                }
-            }
-            repliesParts.push('');
-        }
-        const repliesMd = repliesParts.join('\n');
-        fs.writeFileSync(repliesMdPath, repliesMd, 'utf8');
+        // Build JSON with svarnummer, svartekst, respondentnavn, respondenttype (merged with wizard edits)
+        const repliesObjects = responses.map(r => ({
+            svarnummer: (r && (r.svarnummer ?? r.id)) ?? null,
+            svartekst: (r && (r.svartekst ?? r.text ?? '')) || '',
+            respondentnavn: (r && (r.respondentnavn ?? r.respondentName ?? r.author ?? '')) || '',
+            respondenttype: (r && (r.respondenttype ?? r.respondentType ?? 'Borger')) || 'Borger'
+        }));
+        const repliesText = JSON.stringify(repliesObjects, null, 2);
+        fs.writeFileSync(repliesMdPath, repliesText, 'utf8');
 
         const materialParts = [`# Høringsmateriale for ${hearing.title}`];
         for (const m of materials) {
@@ -2987,7 +2963,7 @@ app.get('/api/summarize/:id', async (req, res) => {
         const promptTemplate = readTextFileSafe(PROMPT_PATH) || '# Opgave\nSkriv en tematiseret opsummering baseret på materialet.';
         const RESP_LIMIT = Number(process.env.RESP_CHAR_LIMIT || 200000);
         const MAT_LIMIT = Number(process.env.MAT_CHAR_LIMIT || 120000);
-        const userPrompt = `${promptTemplate}\n\n# Samlede Høringssvar\n\n${repliesMd.slice(0, RESP_LIMIT)}\n\n# Høringsmateriale \n\n${materialMd.slice(0, MAT_LIMIT)}`;
+        const userPrompt = `${promptTemplate}\n\n[Samlede Høringssvar]\n\n${String(repliesText || '').slice(0, RESP_LIMIT)}\n\n[Høringsmateriale] \n\n${materialMd.slice(0, MAT_LIMIT)}`;
         logDebug(`[summarize] Constructed user prompt of length ${userPrompt.length}.`);
 
         if (userPrompt.length < 200) { // Arbitrary small length check
@@ -3025,7 +3001,7 @@ app.get('/api/summarize/:id', async (req, res) => {
             scored.sort((a, b) => b.n - a.n);
             return scored.slice(0, 6).map(s => s.label);
         }
-        const preThoughts = computePreThoughts(`${repliesMd}\n${materialMd}`);
+        const preThoughts = computePreThoughts(`${repliesText}\n${materialMd}`);
 
         // Build tasks (potentially run in parallel)
         function extractHeadingsFromSummary(text) {
