@@ -653,7 +653,7 @@
                                 <svg class="icon icon-sm">
                                     <use href="/icons.svg#icon-link"></use>
                                 </svg>
-                                Se på Blivhørt
+                                Se på Bliv hørt
                             </a>
                     </div>
                 </div>
@@ -1638,7 +1638,7 @@
             try {
                 if (!u || typeof u !== 'string') return '#';
                 const BH_BASE = 'https://blivhoert.kk.dk';
-                // Already a Blivhørt URL
+                // Already a Bliv hørt URL
                 if (/^https?:\/\/(www\.)?blivhoert\.kk\.dk/i.test(u)) return u;
                 // Parse possibly relative URLs against current origin
                 let urlObj = null;
@@ -1675,8 +1675,8 @@
                     .replace(/Ã†/g, 'Æ')
                     .replace(/Ã˜/g, 'Ø')
                     .replace(/Ã…/g, 'Å')
-                    .replace(/â€“/g, '–')
-                    .replace(/â€”/g, '—')
+                    .replace(/â€" /g, '–')
+                    .replace(/â€" /g, '—')
                     .replace(/â€™/g, "'")
                     .replace(/â€œ/g, '“')
                     .replace(/â€\x9d/g, '”')
@@ -1836,7 +1836,7 @@
                     const m = lastFetched.materials[idx];
                     if (!flags[idx]) continue;
                     if (m && m.url) {
-                        // Prefer direct Blivhørt link for reliability when opening externally
+                        // Prefer direct Bliv hørt link for reliability when opening externally
                         materials.push({ kind: 'link', title: m.title || 'Dokument', url: toDirectBlivhortFileUrl(m.url, m.title) });
                         continue;
                     }
@@ -2039,8 +2039,8 @@
                     const dt = Math.round(window.__genTiming.connected - window.__genTiming.t0);
                     if (progressEl) progressEl.textContent = `Forbundet til serveren (${dt} ms)…`;
                 }
-                // Fallback if totally stuck: give more room to avoid double streams (12s, 6s in demo)
-                const fallbackTimeoutMs = demoParam ? 6000 : 12000;
+                // Fallback if totally stuck: give more room to avoid double streams (25s, 10s in demo)
+                const fallbackTimeoutMs = demoParam ? 10000 : 25000;
                 fallbackTimer = setTimeout(() => {
                     if (!gotAnyVariant && !sseRetryAttempted) {
                         try { controller.abort(); } catch {}
@@ -2085,7 +2085,8 @@
                             }
                             if (Number.isFinite(vId) && vId >= 1 && vId <= 3) {
                                 setVariantStatusText(vId, obj.message || '');
-                                // Do not mark activity for info; avoid cancelling fallback prematurely
+                                // Treat variant-targeted info as activity to avoid premature fallback
+                                markActivity();
                             } else {
                                 // Do not treat generic info as activity; allow fallback to GET if no per-variant events arrive
                             }
@@ -2170,8 +2171,8 @@
                             if (card) {
                                 setVariantStatusText(obj.id, obj.message || `Status: ${obj.phase}`);
                                 const phase = String(obj.phase||'').toLowerCase();
-                                // Treat only meaningful phases as activity; exclude 'connecting', 'preparing', 'queued', 'polling'
-                                const isProgress = ['started','thinking','drafting','done','streaming','using-tools'].includes(phase);
+                                // Treat early per-variant phases as activity as well to keep the stream alive on slow backends
+                                const isProgress = ['started','thinking','drafting','done','streaming','using-tools','preparing','connecting','queued','queueing'].includes(phase);
                                 if (isProgress) markActivity();
                             } else {
                                 const progressEl = document.getElementById('genProgress2');

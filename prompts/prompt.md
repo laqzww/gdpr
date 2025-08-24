@@ -109,7 +109,7 @@ For at nå frem til det endelige output skal du følge denne interne arbejdsproc
     *   Sørg for, at alle henvendelser der refereres til i starten af opsummeringen også fremgår i brødteksten i opsummeringen. 
 
     * Sørg for, at der er et sammenhængende sprog som navigerer læseren igennem opsummeringen. Undgå at referencerne i criticmarkup har en indvirkning på den formidlende tekst. Husk, at borgere kun skal referes til anonymt som borgere - en mere specifik henvisning er kun forbeholdt selve *kommentaren* i CriticMarkup. den øvrige tekst skal bare være formidlet som "For eksempel mener {==en borger==}{>>**Henvendelse x** \n *"[Relevant citat fra henvendelse x]"*<<}, at [uddybning]", "{==To borgere==}{>>**Henvendelse x** \n *"[Relevant citat fra henvendelse x]"* \n **Henvendelse y** \n *[Relevant citat fra henvendelse y*<<} mener [uddybning]" Pointen er her, at den tekst der er inden for {=="..."==}-delen af CriticMarkup teksten skal fungere flydende sammen med den brødtekst der er før og efter, hvor det som slutbrugeren ser af sammenhængende tekst er "For eksempel mener en borger, at [uddybning]" og "To borgere mener [uddybning]". Derfor: undlad at dele opsummeringstekst op imellem en opsummeringsdel, og en referencedel - de dele skal være sammenflettede.
-
+    * LAD VÆRE med at anvende navngivne navne i opsummeringen af respondenter som har respondenttypen 'Borger'. De skal ikke nævnes med navn i opsummeringen. Gør IKKE: "Peter Jensen ønsker..." Gør: "En borger ønsker"
  
 
 ### Trin 5: Citering af holdninger 
