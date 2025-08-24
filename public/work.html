@@ -1251,7 +1251,7 @@
                                         const aid = `att-${response.id}-${idx}`;
                                         return `<div class="attachment-item">
                                             <input type="checkbox" id="${aid}" checked onchange="toggleIncludeAttachment(${response.id}, ${idx}, this.checked); window.updateTokenInfo && window.updateTokenInfo()" />
-                                            <a class="attachment-link" href="${att.url}" target="_blank">📄 ${att.filename}</a>
+                                            <a class="attachment-link" href="${toDirectBlivhortFileUrl(att.url, att.filename)}" target="_blank">📄 ${att.filename}</a>
                                         </div>`;
                                     }).join('')}
                                 </div>` : ''}
@@ -1318,7 +1318,7 @@
                             </button>
                         ` : ''}
                         ${material.url ? `
-                            <a href="${material.url}" target="_blank" class="btn btn-sm btn-secondary mt-md" onclick="event.stopPropagation()">
+                            <a href="${toDirectBlivhortFileUrl(material.url, material.title)}" target="_blank" class="btn btn-sm btn-secondary mt-md" onclick="event.stopPropagation()">
                                 <svg class="icon icon-sm">
                                     <use href="/icons.svg#icon-link"></use>
                                 </svg>
@@ -1546,6 +1546,36 @@
             showNotification(message, 'success');
         }
 
+        // Rewrite any proxy/file-drive URL to a direct Blivhørt file link for reliability when opening in a new tab
+        function toDirectBlivhortFileUrl(u, filename) {
+            try {
+                if (!u || typeof u !== 'string') return '#';
+                const BH_BASE = 'https://blivhoert.kk.dk';
+                // Already a Blivhørt URL
+                if (/^https?:\/\/(www\.)?blivhoert\.kk\.dk/i.test(u)) return u;
+                // Parse possibly relative URLs against current origin
+                let urlObj = null;
+                try { urlObj = new URL(u, window.location.origin); } catch {}
+                // Our proxy -> extract underlying path
+                if (urlObj && /\/api\/file-proxy/i.test(urlObj.pathname)) {
+                    const pathParam = urlObj.searchParams.get('path') || '';
+                    if (pathParam) {
+                        const decoded = decodeURIComponent(pathParam);
+                        if (/^https?:\/\//i.test(decoded)) return decoded; // proxy pointed at an absolute URL
+                        const fn = filename ? `&filename=${encodeURIComponent(filename)}` : '';
+                        return `${BH_BASE}/api/file?path=${encodeURIComponent(decoded)}${fn}`;
+                    }
+                }
+                // Raw internal file-drive path
+                if (/^\/var\/file-drive\//i.test(u) || /^file-drive\//i.test(u) || /^\/file-drive\//i.test(u)) {
+                    const path = u.startsWith('/') ? u : `/${u}`;
+                    const fn = filename ? `&filename=${encodeURIComponent(filename)}` : '';
+                    return `${BH_BASE}/api/file?path=${encodeURIComponent(path)}${fn}`;
+                }
+                return u;
+            } catch { return u; }
+        }
+
         // Safe encoding fixer for occasional mojibake in SSE messages (no exceptions)
         function fixEncoding(text) {
             if (typeof text !== 'string') return text;
@@ -1717,8 +1747,8 @@
                     const m = lastFetched.materials[idx];
                     if (!flags[idx]) continue;
                     if (m && m.url) {
-                        // Fast path: do not fetch remote content client-side; include as link
-                        materials.push({ kind: 'link', title: m.title || 'Dokument', url: m.url });
+                        // Prefer direct Blivhørt link for reliability when opening externally
+                        materials.push({ kind: 'link', title: m.title || 'Dokument', url: toDirectBlivhortFileUrl(m.url, m.title) });
                         continue;
                     }
                     if (m && m.type === 'description' && m.content) {
