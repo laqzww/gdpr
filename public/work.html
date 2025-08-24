@@ -10,7 +10,7 @@
     <meta http-equiv="Expires" content="0">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="/global-styles.css">
-    <script src="/js/data-cache.js?v=2"></script>
+    <script src="/js/data-cache.js?v=3"></script>
     <style>
         /* Page-specific styles */
         .status-badge {
@@ -1894,13 +1894,11 @@
                 }
             } catch (_) {}
 
-            // Prefer resilient background job API with JSON polling; if unavailable, fall back to POST SSE
+            // Prefer POST SSE with compact body (fast, no SQLite dependency). Fallback to GET SSE if needed.
             const hearingId = lastFetched.hearing.id;
-            try { window.__summaryMode = 'jobs'; } catch(_) {}
-            startSummarizeViaJobs(hearingId).catch(() => {
-                try { window.__summaryMode = 'sse'; } catch(_) {}
-                // Use POST SSE with compact body first to avoid long query strings being blocked
-                startSummarizeViaFetch(hearingId, { force: true });
+            try { window.__summaryMode = 'sse'; } catch(_) {}
+            startSummarizeViaFetch(hearingId, { force: true }).catch(() => {
+                startSummarizeViaEventSource(hearingId, { force: true });
             });
         }
 
@@ -2041,8 +2039,8 @@
                     const dt = Math.round(window.__genTiming.connected - window.__genTiming.t0);
                     if (progressEl) progressEl.textContent = `Forbundet til serveren (${dt} ms)…`;
                 }
-                // Fallback quickly if stuck at connecting: 6s (or 5s in demo)
-                const fallbackTimeoutMs = demoParam ? 5000 : 6000;
+                // Fallback if totally stuck: give more room to avoid double streams (12s, 6s in demo)
+                const fallbackTimeoutMs = demoParam ? 6000 : 12000;
                 fallbackTimer = setTimeout(() => {
                     if (!gotAnyVariant && !sseRetryAttempted) {
                         try { controller.abort(); } catch {}
