@@ -1883,9 +1883,12 @@
 
             // Prefer resilient background job API with JSON polling to avoid long-lived SSE timeouts on proxies
             const hearingId = lastFetched.hearing.id;
+            // Mark active mode to prevent duplicate fallbacks
+            try { window.__summaryMode = 'jobs'; } catch(_) {}
             startSummarizeViaJobs(hearingId).catch(() => {
-                // Fallback to streaming if jobs API is unavailable
-                startSummarizeViaFetch(hearingId);
+                // Fallback to direct GET SSE (no background job) if jobs API is unavailable
+                try { window.__summaryMode = 'sse'; } catch(_) {}
+                startSummarizeViaEventSource(hearingId, { force: true });
             });
         }
 
@@ -1923,14 +1926,16 @@
             }
         }
 
-        async function startSummarizeViaFetch(hearingId) {
+        async function startSummarizeViaFetch(hearingId, opts = {}) {
+            // Avoid starting this path when Jobs mode is active unless explicitly forced
+            try { if (!opts.force && window.__summaryMode === 'jobs') return; } catch(_) {}
             const usp = new URLSearchParams(window.location.search);
             const demoParam = usp.get('demo');
             const bgParam = usp.get('bg');
             const testParam = usp.get('test');
             const demoPart = demoParam ? `&demo=${encodeURIComponent(demoParam)}` : '';
-            // Prefer background mode by default on Render-like environments to avoid long-lived streams being cut
-            const bgPart = (bgParam !== null) ? `&bg=${encodeURIComponent(bgParam)}` : '&bg=1';
+            // Force direct streaming by default to avoid spawning extra background jobs in fallback
+            const bgPart = (bgParam !== null) ? `&bg=${encodeURIComponent(bgParam)}` : '&bg=0';
             const testPart = testParam ? `&test=${encodeURIComponent(testParam)}` : '';
             const url = `/api/summarize/${hearingId}?n=3&nocache=1&t=${Date.now()}${demoPart}${bgPart}${testPart}`;
             const progressEl = document.getElementById('genProgress2');
@@ -2011,8 +2016,8 @@
                     if (!gotAnyVariant && !sseRetryAttempted) {
                         try { controller.abort(); } catch {}
                         sseRetryAttempted = true;
-                        // Switch to GET + EventSource fallback
-                        startSummarizeViaEventSource(hearingId);
+                        // Switch to GET + EventSource fallback (force direct streaming)
+                        startSummarizeViaEventSource(hearingId, { force: true });
                     }
                 }, fallbackTimeoutMs);
                 function handleSseChunk(chunkText) {
@@ -2187,13 +2192,16 @@
             }
         }
 
-        async function startSummarizeViaEventSource(hearingId) {
+        async function startSummarizeViaEventSource(hearingId, opts = {}) {
+            // Avoid starting this path when Jobs mode is active unless explicitly forced
+            try { if (!opts.force && window.__summaryMode === 'jobs') return; } catch(_) {}
             try {
                 const usp = new URLSearchParams(window.location.search);
                 const bgParam = usp.get('bg');
                 const demoParam = usp.get('demo');
                 const delayParam = usp.get('delay');
-                const bgPart = bgParam ? `&bg=${encodeURIComponent(bgParam)}` : '&bg=1';
+                // Force direct streaming by default to avoid spawning extra background jobs
+                const bgPart = bgParam ? `&bg=${encodeURIComponent(bgParam)}` : '&bg=0';
                 const demoPart = demoParam ? `&demo=${encodeURIComponent(demoParam)}` : '';
                 const delayPart = delayParam ? `&delay=${encodeURIComponent(delayParam)}` : '';
                 // Prepare minimal respondent overrides for fallback GET as URL-encoded JSON
