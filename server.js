@@ -42,6 +42,14 @@ const CLASSIFY_INTERNAL_TIMEOUT_MS = Number(process.env.CLASSIFY_INTERNAL_TIMEOU
 const SUMMARIZE_TIMEOUT_MS = Number(process.env.SUMMARIZE_TIMEOUT_MS || 1500000);
 // Warmup configuration
 const WARM_ALL_ON_START = String(process.env.WARM_ALL_ON_START || '').toLowerCase() === 'true';
+// Open-hearings refresh configuration
+const REFRESH_TARGET_STATUSES = (process.env.REFRESH_TARGET_STATUSES || 'Afventer konklusion, Aktiv')
+    .split(',')
+    .map(s => s.trim().toLowerCase())
+    .filter(Boolean);
+const REFRESH_MAX_ATTEMPTS = Math.max(1, Number(process.env.REFRESH_MAX_ATTEMPTS || 6));
+const REFRESH_STABLE_REPEATS = Math.max(1, Number(process.env.REFRESH_STABLE_REPEATS || 2));
+const REFRESH_CONCURRENCY = Math.max(1, Number(process.env.REFRESH_CONCURRENCY || 2));
 // Node HTTP server timeouts (tuned for SSE and long background jobs). Defaults chosen to avoid premature disconnects
 const SERVER_KEEP_ALIVE_TIMEOUT_MS = Number(process.env.SERVER_KEEP_ALIVE_TIMEOUT_MS || 65000);
 const SERVER_HEADERS_TIMEOUT_MS = Number(process.env.SERVER_HEADERS_TIMEOUT_MS || 66000);
@@ -4082,6 +4090,22 @@ server.listen(PORT, () => {
                 } catch {}
             });
 
+            // New: refresh only open/active hearings until stable
+            const refreshOpenSpec = process.env.CRON_REFRESH_OPEN_SCHEDULE || '15 */1 * * *';
+            cron.schedule(refreshOpenSpec, async () => {
+                try {
+                    const ids = await listRefreshTargetHearings();
+                    let idx = 0;
+                    const workers = new Array(Math.min(REFRESH_CONCURRENCY, Math.max(1, ids.length))).fill(0).map(async () => {
+                        while (idx < ids.length) {
+                            const my = ids[idx++];
+                            await refreshHearingUntilStable(my);
+                        }
+                    });
+                    await Promise.all(workers);
+                } catch {}
+            });
+
             // Jobs cleanup
             const jobCleanupSpec = process.env.CRON_JOBS_CLEANUP || '12 * * * *';
             cron.schedule(jobCleanupSpec, () => {
@@ -4094,4 +4118,103 @@ server.listen(PORT, () => {
 
     // Resume any dangling jobs from previous run
     try { resumeDanglingJobs(); } catch (e) { console.warn('resumeDanglingJobs failed:', e.message); }
+});
+
+// =============================
+// Robust refresh for open hearings (materials + responses) with stabilization
+// =============================
+
+function statusMatchesRefreshTargets(statusText) {
+    const s = String(statusText || '').toLowerCase();
+    return REFRESH_TARGET_STATUSES.some(t => s.includes(t));
+}
+
+async function fetchAggregateOnce(localBase, hearingId) {
+    const aggUrl = `${localBase}/api/hearing/${encodeURIComponent(hearingId)}?nocache=1`;
+    const matUrl = `${localBase}/api/hearing/${encodeURIComponent(hearingId)}/materials?nocache=1`;
+    const [agg, mats] = await Promise.all([
+        axios.get(aggUrl, { validateStatus: () => true, timeout: INTERNAL_API_TIMEOUT_MS }).catch(() => ({ status: 0, data: null })),
+        axios.get(matUrl, { validateStatus: () => true, timeout: INTERNAL_API_TIMEOUT_MS }).catch(() => ({ status: 0, data: null }))
+    ]);
+    const hearing = (agg.data && agg.data.hearing) ? agg.data.hearing : null;
+    const responses = (agg.data && Array.isArray(agg.data.responses)) ? agg.data.responses : [];
+    const materials = (mats.data && Array.isArray(mats.data.materials)) ? mats.data.materials : [];
+    const ok = !!hearing && responses.length >= 0 && materials.length >= 0;
+    return { ok, hearing, responses, materials };
+}
+
+function snapshotSignature(s) {
+    if (!s) return 'x';
+    const numR = Array.isArray(s.responses) ? s.responses.length : 0;
+    const numM = Array.isArray(s.materials) ? s.materials.length : 0;
+    const firstRid = numR ? (s.responses[0]?.id || s.responses[0]?.responseNumber || 0) : 0;
+    const lastRid = numR ? (s.responses[numR - 1]?.id || s.responses[numR - 1]?.responseNumber || 0) : 0;
+    const firstM = numM ? (s.materials[0]?.title || s.materials[0]?.url || '') : '';
+    const lastM = numM ? (s.materials[numM - 1]?.title || s.materials[numM - 1]?.url || '') : '';
+    return `${numR}|${firstRid}|${lastRid}::${numM}|${firstM}|${lastM}`;
+}
+
+async function refreshHearingUntilStable(hearingId) {
+    const localBase = (process.env.PUBLIC_URL || '').trim() || `http://localhost:${PORT}`;
+    let lastSig = '';
+    let stableRepeats = 0;
+    for (let attempt = 1; attempt <= REFRESH_MAX_ATTEMPTS; attempt++) {
+        const snap = await fetchAggregateOnce(localBase, hearingId);
+        if (!snap.ok) {
+            await sleep(400 * attempt);
+            continue;
+        }
+        if (!statusMatchesRefreshTargets(snap.hearing?.status || '')) {
+            return { skipped: true, reason: 'status-mismatch' };
+        }
+        const sig = snapshotSignature(snap);
+        if (sig === lastSig) {
+            stableRepeats += 1;
+            if (stableRepeats >= REFRESH_STABLE_REPEATS) {
+                return { success: true, responses: snap.responses.length, materials: snap.materials.length };
+            }
+        } else {
+            lastSig = sig;
+            stableRepeats = 1;
+        }
+        await sleep(500 * attempt);
+    }
+    return { success: false };
+}
+
+async function listRefreshTargetHearings() {
+    let ids = [];
+    try {
+        ids = hearingIndex
+            .filter(h => statusMatchesRefreshTargets(h.status))
+            .map(h => h.id);
+    } catch {}
+    if (!ids.length && sqliteDb && sqliteDb.prepare) {
+        try {
+            const rows = sqliteDb.prepare(`SELECT id, status FROM hearings`).all();
+            ids = rows.filter(r => statusMatchesRefreshTargets(r.status)).map(r => r.id);
+        } catch {}
+    }
+    return Array.from(new Set(ids)).filter(x => Number.isFinite(x));
+}
+
+app.post('/api/refresh/open', async (req, res) => {
+    try {
+        const ids = await listRefreshTargetHearings();
+        let idx = 0;
+        let completed = 0;
+        const results = [];
+        const workers = new Array(Math.min(REFRESH_CONCURRENCY, Math.max(1, ids.length))).fill(0).map(async () => {
+            while (idx < ids.length) {
+                const my = ids[idx++];
+                const out = await refreshHearingUntilStable(my);
+                results.push({ id: my, ...out });
+                completed += 1;
+            }
+        });
+        await Promise.all(workers);
+        res.json({ success: true, total: ids.length, refreshed: completed, results });
+    } catch (e) {
+        res.status(500).json({ success: false, message: 'Refresh failed', error: e.message });
+    }
 });
