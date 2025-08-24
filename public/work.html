@@ -962,11 +962,12 @@
                         displayResponses(lastFetched.responses);
                         showLoading(false);
                         
-                        // Load materials from cache
+                        // Load materials from cache (only accept non-empty); otherwise kick off resilient fetch
                         const cachedMaterials = await window.dataCache.getMaterials(hearingId);
-                        if (cachedMaterials) {
-                            lastFetched.materials = cachedMaterials;
-                            displayMaterials(cachedMaterials);
+                        if (isAcceptableMaterials(cachedMaterials)) {
+                            await acceptAndPersistMaterials(hearingId, cachedMaterials);
+                        } else {
+                            try { await fetchMaterials(hearingId); } catch {}
                         }
                         // Load session uploads
                         try {
@@ -1008,16 +1009,16 @@
                         applySavedEdits();
                         displayHearingInfo(lastFetched.hearing);
                         displayResponses(lastFetched.responses);
-                        // Materials DB-only
+                        // Materials: DB-only attempt, accept only non-empty; otherwise fallback to resilient fetch
                         try {
                             const rmat = await fetch(`/api/hearing/${encodeURIComponent(hearingId)}/materials?db=1`);
                             const jmat = await rmat.json().catch(()=>({}));
-                            if (jmat && jmat.success && Array.isArray(jmat.materials)) {
-                                lastFetched.materials = jmat.materials;
-                                displayMaterials(lastFetched.materials);
-                                try { if (window.dataCache) await window.dataCache.setMaterials(hearingId, jmat.materials); } catch {}
+                            if (jmat && jmat.success && isAcceptableMaterials(jmat.materials)) {
+                                await acceptAndPersistMaterials(hearingId, jmat.materials);
+                            } else {
+                                try { await fetchMaterials(hearingId); } catch {}
                             }
-                        } catch {}
+                        } catch { try { await fetchMaterials(hearingId); } catch {} }
                         // Session uploads
                         try {
                             const ur = await fetch(`/api/session/uploads/${encodeURIComponent(hearingId)}`);
@@ -1074,16 +1075,38 @@
             }
         }
 
+        // Materials acceptance and persistence helpers
+        function isAcceptableMaterials(materials) {
+            try {
+                if (!Array.isArray(materials) || materials.length === 0) return false;
+                for (const m of materials) {
+                    if (!m) continue;
+                    if (m.type === 'description' && typeof m.content === 'string' && m.content.trim().length > 0) return true;
+                    if (m.type === 'file' && typeof m.url === 'string' && m.url.trim().length > 0) return true;
+                    if (typeof m.url === 'string' && m.url.trim().length > 0) return true;
+                }
+                return false;
+            } catch { return false; }
+        }
+
+        async function acceptAndPersistMaterials(hearingId, materials) {
+            try {
+                if (!isAcceptableMaterials(materials)) return false;
+                lastFetched.materials = materials;
+                displayMaterials(lastFetched.materials);
+                if (window.dataCache) { try { await window.dataCache.setMaterials(hearingId, materials); } catch {} }
+                return true;
+            } catch { return false; }
+        }
+
         async function fetchMaterials(hearingId) {
             // Prefer DB-first and avoid long blocking; then warm and poll if empty
             try {
                 const t = Date.now();
                 const rdb = await fetchWithTimeout(`/api/hearing/${hearingId}/materials?db=1&t=${t}`, { cache: 'no-cache', headers: { 'Cache-Control': 'no-cache' } }, 10000);
                 const jdb = await rdb.json().catch(()=>({}));
-                if (jdb && jdb.success && Array.isArray(jdb.materials) && jdb.materials.length) {
-                    lastFetched.materials = jdb.materials;
-                    displayMaterials(lastFetched.materials);
-                    if (window.dataCache) { try { await window.dataCache.setMaterials(hearingId, jdb.materials); } catch {} }
+                if (jdb && jdb.success && isAcceptableMaterials(jdb.materials)) {
+                    await acceptAndPersistMaterials(hearingId, jdb.materials);
                     return;
                 }
             } catch (_) {}
@@ -1093,10 +1116,8 @@
                 const t2 = Date.now();
                 const r2 = await fetchWithTimeout(`/api/hearing/${hearingId}/materials?db=1&t=${t2}`, { cache: 'no-cache', headers: { 'Cache-Control': 'no-cache' } }, 10000);
                 const j2 = await r2.json().catch(()=>({}));
-                if (j2 && j2.success && Array.isArray(j2.materials)) {
-                    lastFetched.materials = j2.materials;
-                    displayMaterials(lastFetched.materials);
-                    if (window.dataCache) { try { await window.dataCache.setMaterials(hearingId, j2.materials); } catch {} }
+                if (j2 && j2.success && isAcceptableMaterials(j2.materials)) {
+                    await acceptAndPersistMaterials(hearingId, j2.materials);
                 }
             } catch (e) {
                 try { await fetch('/api/client-log', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ level: 'warn', message: 'fetchMaterials warm+poll failed', meta: { hearingId, error: String(e) } }) }); } catch {}
@@ -1145,10 +1166,8 @@
                     try {
                         const r2 = await fetchWithTimeout(`/api/hearing/${encodeURIComponent(hearingId)}/materials?db=1&t=${Date.now()}`, { cache: 'no-cache', headers: { 'Cache-Control': 'no-cache' } }, 8000);
                         const j2 = await r2.json().catch(() => ({}));
-                        if (j2 && j2.success && Array.isArray(j2.materials)) {
-                            lastFetched.materials = j2.materials;
-                            displayMaterials(lastFetched.materials);
-                            try { if (window.dataCache) await window.dataCache.setMaterials(hearingId, j2.materials); } catch {}
+                        if (j2 && j2.success && isAcceptableMaterials(j2.materials)) {
+                            try { await acceptAndPersistMaterials(hearingId, j2.materials); } catch {}
                             break;
                         }
                     } catch (_) {}
