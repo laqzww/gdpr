@@ -1,4 +1,5 @@
 const path = require('path');
+const fs = require('fs');
 const { spawnSync } = require('child_process');
 let Database;
 
@@ -78,6 +79,8 @@ function init() {
     }
     // Attempt to open DB; if ABI mismatch occurs at instantiation, try a one-time rebuild
     try {
+        // Ensure parent directory exists to avoid SQLITE_CANTOPEN errors
+        try { fs.mkdirSync(path.dirname(DB_PATH), { recursive: true }); } catch (_) {}
         db = new Database(DB_PATH);
     } catch (e) {
         if (needsRebuild(e) && process.env.ALLOW_RUNTIME_SQLITE_REBUILD === '1') {
@@ -87,6 +90,7 @@ function init() {
                 Database = re;
             }
             // Retry once after rebuild
+            try { fs.mkdirSync(path.dirname(DB_PATH), { recursive: true }); } catch (_) {}
             db = new Database(DB_PATH);
         } else {
             throw e;
