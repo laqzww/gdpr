@@ -461,6 +461,9 @@ function getJobSnapshot(jobId) {
 }
 
 async function createJob(req, hearingId, payload) {
+    if (!sqliteDb || !sqliteDb.prepare) {
+        return { error: 'Database unavailable', status: 503 };
+    }
     const n = Math.max(1, Math.min(Number(req.query.n || (payload && payload.n) || DEFAULT_VARIANTS) || DEFAULT_VARIANTS, 5));
     if (!canStartAnotherJob(req)) {
         return { error: 'Too many concurrent jobs', status: 429 };
@@ -484,16 +487,14 @@ async function createJob(req, hearingId, payload) {
 
     const jobId = `job_${crypto.randomUUID ? crypto.randomUUID() : sha1Hex(String(Math.random()))}`;
     const now = nowMs();
-    // Guard: ensure we only insert a numeric hearing_id (or NULL) to avoid binding issues
-    const hearingIdNum = /^\d+$/.test(String(hearingId)) ? Number(hearingId) : null;
     try {
+        const hearingIdNum = /^\d+$/.test(String(hearingId)) ? Number(hearingId) : null;
         sqliteDb.prepare(`INSERT INTO jobs(job_id, hearing_id, state, phase, progress, created_at, updated_at, idempotency_key, input_hash) VALUES (?,?,?,?,?,?,?,?,?)`)
             .run(jobId, hearingIdNum, 'queued', 'queued', 0, now, now, idemp || null, inputHash || null);
         const insVar = sqliteDb.prepare(`INSERT INTO job_variants(job_id, variant, state, phase, progress, updated_at) VALUES (?,?,?,?,?,?)`);
         for (let i = 1; i <= n; i++) insVar.run(jobId, i, 'queued', 'queued', 0, now);
     } catch (e) {
-        try { appendEvent(jobId, 'error', 'DB insert failed', { err: e && e.message ? e.message : String(e) }); } catch {}
-        return { error: `DB insert failed${e && e.message ? `: ${e.message}` : ''}`, status: 500 };
+        return { error: `DB insert failed: ${e && e.message ? e.message : String(e)}`, status: 500 };
     }
 
     appendEvent(jobId, 'info', 'Job created', { hearingId, n });
@@ -831,6 +832,9 @@ async function legacySummarizeAsJobSse(req, res, payload) {
 // API: Create summarize job
 app.post('/api/jobs/summarize/:hearingId', express.json({ limit: '25mb' }), async (req, res) => {
     try {
+        if (!sqliteDb || !sqliteDb.prepare) {
+            return res.status(503).json({ success: false, message: 'Database unavailable' });
+        }
         const hearingId = String(req.params.hearingId).trim();
         const payload = {
             hearing: req.body?.hearing,
@@ -2798,7 +2802,8 @@ app.get('/api/summarize/:id', async (req, res) => {
         // Respect explicit bg=0 to force direct streaming and avoid DB inserts
         const bgParam = String(req.query.bg || '').trim().toLowerCase();
         const forceDirect = bgParam === '0' || bgParam === 'false' || bgParam === 'no';
-        if (BACKGROUND_MODE && !forceDirect) {
+        const dbReady = !!(sqliteDb && sqliteDb.prepare);
+        if (BACKGROUND_MODE && !forceDirect && dbReady) {
             await legacySummarizeAsJobSse(req, res, null);
             return;
         }
@@ -3359,7 +3364,8 @@ app.post('/api/summarize/:id', express.text({ type: 'application/json', limit: '
                 // Respect explicit bg=0 to force direct streaming and avoid DB inserts
                 const bgParam2 = String(req.query.bg || '').trim().toLowerCase();
                 const forceDirect2 = bgParam2 === '0' || bgParam2 === 'false' || bgParam2 === 'no';
-                if (BACKGROUND_MODE && !forceDirect2) {
+                const dbReady2 = !!(sqliteDb && sqliteDb.prepare);
+                if (BACKGROUND_MODE && !forceDirect2 && dbReady2) {
                     await legacySummarizeAsJobSse(req, res, {
                         hearing: parsedBody && parsedBody.hearing,
                         responses: parsedBody && parsedBody.responses,
