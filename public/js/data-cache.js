@@ -7,7 +7,7 @@ class DataCache {
     constructor() {
         this.dbName = 'BlivhoertCache';
         // Bump version to ensure onupgradeneeded runs and creates any missing stores
-        this.dbVersion = 2;
+        this.dbVersion = 3;
         this.db = null;
         this.useIndexedDB = true;
         this.cacheExpiry = 24 * 60 * 60 * 1000; // 24 hours default
@@ -201,7 +201,10 @@ class DataCache {
     async getSearchIndex() {
         if (this.useIndexedDB) {
             const data = await this._getFromIndexedDB('searchIndex', 'all');
-            return data ? data.items : null;
+            if (data && Array.isArray(data.items)) return data.items;
+            // Fallback: if IndexedDB entry is missing (e.g., store cleared), try localStorage backup
+            const backup = this._getFromLocalStorage('blivhoert_searchIndex');
+            return backup ? backup.items : null;
         } else {
             const data = this._getFromLocalStorage('blivhoert_searchIndex');
             return data ? data.items : null;
@@ -213,6 +216,8 @@ class DataCache {
         
         if (this.useIndexedDB) {
             await this._setToIndexedDB('searchIndex', data);
+            // Redundant backup for robustness: also store a copy in localStorage
+            try { this._setToLocalStorage('blivhoert_searchIndex', data); } catch (_) {}
         } else {
             this._setToLocalStorage('blivhoert_searchIndex', data);
         }

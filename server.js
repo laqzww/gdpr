@@ -1336,6 +1336,12 @@ app.get('/api/hearings', (req, res) => {
             });
         }
 
+        // Restrict index to hearings that are currently 'Aktiv' or 'Afventer konklusion'
+        results = results.filter(hi => {
+            const s = String(hi.status || '').toLowerCase();
+            return s === 'aktiv' || s.includes('afventer konklusion');
+        });
+
         // Sort: open first, then by deadline asc, then title
         results.sort((a, b) => {
             if (a.isOpen !== b.isOpen) return a.isOpen ? -1 : 1;
@@ -3987,6 +3993,18 @@ app.post('/api/client-log', express.json({ limit: '256kb' }), (req, res) => {
 // Health endpoints for Render
 app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
 app.get('/healthz', (req, res) => res.status(200).json({ status: 'ok' }));
+
+// Rebuild/warm hearings search index on demand (fire-and-forget)
+app.post('/api/rebuild-index', async (req, res) => {
+    try {
+        setImmediate(() => {
+            try { warmHearingIndex().catch(() => {}); } catch {}
+        });
+        res.json({ success: true, queued: true });
+    } catch (e) {
+        res.status(500).json({ success: false, message: 'Kunne ikke starte genopbygning' });
+    }
+});
 
 // Prefetch and persist all data for a hearing (meta+responses+materials) to disk
 app.post('/api/prefetch/:id', async (req, res) => {

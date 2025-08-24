@@ -998,6 +998,13 @@
                     const jdb = await rdb.json().catch(()=>({}));
                     if (jdb && jdb.success && jdb.found && jdb.hearing) {
                         lastFetched = { hearing: jdb.hearing, responses: jdb.responses || [], materials: [], uploads: [] };
+                        // Persist to local cache for robustness
+                        try {
+                            if (window.dataCache) {
+                                await window.dataCache.setHearing(hearingId, { hearing: jdb.hearing });
+                                if (Array.isArray(jdb.responses)) await window.dataCache.setResponses(hearingId, jdb.responses);
+                            }
+                        } catch {}
                         applySavedEdits();
                         displayHearingInfo(lastFetched.hearing);
                         displayResponses(lastFetched.responses);
@@ -1008,6 +1015,7 @@
                             if (jmat && jmat.success && Array.isArray(jmat.materials)) {
                                 lastFetched.materials = jmat.materials;
                                 displayMaterials(lastFetched.materials);
+                                try { if (window.dataCache) await window.dataCache.setMaterials(hearingId, jmat.materials); } catch {}
                             }
                         } catch {}
                         // Session uploads
@@ -1115,6 +1123,13 @@
                         const j = await r.json().catch(() => ({}));
                         if (j && j.success && j.found && j.hearing) {
                             lastFetched = { hearing: j.hearing, responses: j.responses || [], materials: lastFetched.materials || [], uploads: lastFetched.uploads || [] };
+                            // Persist to local cache whenever we refresh
+                            try {
+                                if (window.dataCache) {
+                                    await window.dataCache.setHearing(hearingId, { hearing: j.hearing });
+                                    if (Array.isArray(j.responses)) await window.dataCache.setResponses(hearingId, j.responses);
+                                }
+                            } catch {}
                             applySavedEdits();
                             displayHearingInfo(j.hearing);
                             displayResponses(lastFetched.responses);
@@ -1133,6 +1148,7 @@
                         if (j2 && j2.success && Array.isArray(j2.materials)) {
                             lastFetched.materials = j2.materials;
                             displayMaterials(lastFetched.materials);
+                            try { if (window.dataCache) await window.dataCache.setMaterials(hearingId, j2.materials); } catch {}
                             break;
                         }
                     } catch (_) {}

@@ -512,17 +512,45 @@
             try {
                 const response = await fetch('/api/hearings');
                 const data = await response.json();
-                if (data.success) {
-                    cachedSearchIndex = data.hearings;
-                    lastIndexFetch = Date.now();
-                    // Save to cache
-                    if (window.dataCache) {
-                        await window.dataCache.setSearchIndex(data.hearings);
+                if (data.success && Array.isArray(data.hearings)) {
+                    // If index seems empty, try to rebuild on the server and retry once
+                    if (data.hearings.length === 0) {
+                        try { await fetch('/api/rebuild-index', { method: 'POST' }); } catch {}
+                        // Small delay before retry
+                        await new Promise(r => setTimeout(r, 800));
+                        const r2 = await fetch('/api/hearings?nocache=1');
+                        const d2 = await r2.json().catch(()=>({ success:false, hearings:[] }));
+                        if (d2 && d2.success && Array.isArray(d2.hearings)) {
+                            cachedSearchIndex = d2.hearings;
+                            lastIndexFetch = Date.now();
+                            if (window.dataCache) { await window.dataCache.setSearchIndex(d2.hearings); }
+                            return d2.hearings;
+                        }
+                    } else {
+                        cachedSearchIndex = data.hearings;
+                        lastIndexFetch = Date.now();
+                        // Save to cache
+                        if (window.dataCache) {
+                            await window.dataCache.setSearchIndex(data.hearings);
+                        }
+                        return data.hearings;
                     }
-                    return data.hearings;
                 }
             } catch (error) {
                 console.error('Failed to load search index:', error);
+                // As a last resort, try to rebuild and retry once
+                try { await fetch('/api/rebuild-index', { method: 'POST' }); } catch {}
+                try {
+                    await new Promise(r => setTimeout(r, 800));
+                    const r3 = await fetch('/api/hearings?nocache=1');
+                    const d3 = await r3.json();
+                    if (d3 && d3.success && Array.isArray(d3.hearings)) {
+                        cachedSearchIndex = d3.hearings;
+                        lastIndexFetch = Date.now();
+                        if (window.dataCache) { await window.dataCache.setSearchIndex(d3.hearings); }
+                        return d3.hearings;
+                    }
+                } catch {}
             }
             return [];
         }
