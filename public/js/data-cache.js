@@ -317,16 +317,20 @@ class DataCache {
         }
 
         try {
-            const response = await fetch(`/api/hearing/${hearingId}?persist=1`);
-            const data = await response.json();
+            // Try persisted-only snapshot to avoid triggering heavy fetches during preload
+            const respPersist = await fetch(`/api/hearing/${hearingId}?persistOnly=1`);
+            const data = await respPersist.json();
             
-            if (data.success) {
+            if (data && data.success && (data.found || data.hearing)) {
                 await this.setHearing(hearingId, data);
                 
                 // Also cache responses if included
                 if (data.responses) {
                     await this.setResponses(hearingId, data.responses);
                 }
+            } else {
+                // Queue a background warm on the server so snapshot becomes available soon
+                try { fetch(`/api/warm/${encodeURIComponent(hearingId)}`, { method: 'POST' }).catch(()=>{}); } catch {}
             }
         } catch (error) {
             console.warn(`Failed to preload hearing ${hearingId}`, error);
@@ -341,11 +345,13 @@ class DataCache {
         }
 
         try {
-            const response = await fetch(`/api/hearing/${hearingId}/materials?persist=1`);
-            const data = await response.json();
+            const respPersist = await fetch(`/api/hearing/${hearingId}/materials?persistOnly=1`);
+            const data = await respPersist.json();
             
-            if (data.success && data.materials) {
+            if (data && data.success && Array.isArray(data.materials) && data.materials.length) {
                 await this.setMaterials(hearingId, data.materials);
+            } else {
+                try { fetch(`/api/warm/${encodeURIComponent(hearingId)}`, { method: 'POST' }).catch(()=>{}); } catch {}
             }
         } catch (error) {
             console.warn(`Failed to preload materials for hearing ${hearingId}`, error);

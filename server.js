@@ -58,7 +58,7 @@ const WARM_CONCURRENCY = Math.max(1, Number(process.env.WARM_CONCURRENCY || 2));
 const WARM_MAX_HEARINGS = Number(process.env.WARM_MAX_HEARINGS || 0); // 0 = no limit
 const WARM_RETRY_ATTEMPTS = Math.max(1, Number(process.env.WARM_RETRY_ATTEMPTS || 2));
 // Prefer API-only prefetcher (avoids heavy HTML scraping) for cron/warm paths
-const API_ONLY_PREFETCH = parseBoolean(process.env.API_ONLY_PREFETCH || 'false');
+const API_ONLY_PREFETCH = parseBoolean(process.env.API_ONLY_PREFETCH || 'true');
 const WARM_MIN_INTERVAL_MS = Math.max(0, Number(process.env.WARM_MIN_INTERVAL_MS || 120000));
 const PREFETCH_CONCURRENCY = Math.max(1, Number(process.env.PREFETCH_CONCURRENCY || 2));
 const PREFETCH_MIN_INTERVAL_MS = Math.max(0, Number(process.env.PREFETCH_MIN_INTERVAL_MS || 10*60*1000));
@@ -1997,6 +1997,7 @@ app.get('/api/hearing/:id', async (req, res) => {
         const hearingId = String(req.params.id).trim();
         const noCache = String(req.query.nocache || '').trim() === '1';
         const dbOnly = String(req.query.db || '').trim() === '1';
+        const persistOnly = String(req.query.persistOnly || '').trim() === '1';
         logDebug(`[api/hearing] start id=${hearingId} dbOnly=${dbOnly} noCache=${noCache} persist=${String(req.query.persist||'')}`);
         if (dbOnly) {
             try {
@@ -2011,6 +2012,17 @@ app.get('/api/hearing/:id', async (req, res) => {
                 logDebug(`[api/hearing] dbOnly exception id=${hearingId} err=${e && e.message}`);
                 return res.json({ success: true, found: false });
             }
+        }
+        // Fast path: serve only from persisted disk cache if requested; never trigger network fetch
+        if (persistOnly) {
+            try {
+                const meta = readPersistedHearingWithMeta(hearingId);
+                const persisted = meta?.data;
+                if (persisted && persisted.success && Array.isArray(persisted.responses) && !isPersistStale(meta)) {
+                    return res.json({ success: true, found: true, hearing: persisted.hearing, totalPages: persisted.totalPages || undefined, totalResponses: persisted.responses.length, responses: persisted.responses });
+                }
+            } catch {}
+            return res.json({ success: true, found: false });
         }
         // Prefer persisted on disk if requested or configured and not stale
         try {
@@ -2347,6 +2359,7 @@ app.get('/api/hearing/:id/materials', async (req, res) => {
         const hearingId = String(req.params.id).trim();
         const noCache = String(req.query.nocache || '').trim() === '1';
         const dbOnly = String(req.query.db || '').trim() === '1';
+        const persistOnly = String(req.query.persistOnly || '').trim() === '1';
         logDebug(`[api/materials] start id=${hearingId} dbOnly=${dbOnly} noCache=${noCache} persist=${String(req.query.persist||'')}`);
         if (dbOnly) {
             try {
@@ -2358,6 +2371,18 @@ app.get('/api/hearing/:id/materials', async (req, res) => {
                 logDebug(`[api/materials] dbOnly exception`);
                 return res.json({ success: true, found: false, materials: [] });
             }
+        }
+        // Fast path: serve only from persisted disk cache if requested; never trigger network fetch
+        if (persistOnly) {
+            try {
+                const meta = readPersistedHearingWithMeta(hearingId);
+                const persisted = meta?.data;
+                if (persisted && persisted.success && Array.isArray(persisted.materials) && !isPersistStale(meta)) {
+                    logDebug(`[api/materials] persisted-only hit ${persisted.materials.length}`);
+                    return res.json({ success: true, found: true, materials: persisted.materials });
+                }
+            } catch {}
+            return res.json({ success: true, found: false, materials: [] });
         }
         const preferPersist = PERSIST_PREFER || String(req.query.persist || '').trim() === '1';
         if (preferPersist) {
@@ -4181,7 +4206,8 @@ server.listen(PORT, () => {
             try {
                 const items = Array.isArray(hearingIndex) ? hearingIndex.slice() : [];
                 const max = Number.isFinite(WARM_MAX_HEARINGS) && WARM_MAX_HEARINGS > 0 ? Math.min(items.length, WARM_MAX_HEARINGS) : items.length;
-                const queue = items.slice(0, max).map(h => h.id).filter(id => Number.isFinite(id));
+                // Only warm hearings that match configured refresh target statuses (mostly static ones too)
+                const queue = items.slice(0, max).filter(h => statusMatchesRefreshTargets(h.status)).map(h => h.id).filter(id => Number.isFinite(id));
                 let active = 0;
                 let idx = 0;
                 const next = async () => {

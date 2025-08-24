@@ -1005,11 +1005,18 @@
                     }
                 }
                 
-                // No cache: try DB-only (non-blocking) first
+                // No cache: try persisted-only (non-blocking) first, then DB-only
                 try {
-                    const rdb = await fetch(`/api/hearing/${encodeURIComponent(hearingId)}?db=1`);
-                    const jdb = await rdb.json().catch(()=>({}));
-                    if (jdb && jdb.success && jdb.found && jdb.hearing) {
+                    let jPersist = null;
+                    try {
+                        const rp = await fetch(`/api/hearing/${encodeURIComponent(hearingId)}?persistOnly=1&t=${Date.now()}`);
+                        jPersist = await rp.json().catch(()=>({}));
+                    } catch {}
+                    const jdb = (jPersist && jPersist.success && jPersist.found) ? jPersist : await (async () => {
+                        const rdb = await fetch(`/api/hearing/${encodeURIComponent(hearingId)}?db=1&t=${Date.now()}`);
+                        return await rdb.json().catch(()=>({}));
+                    })();
+                    if (jdb && jdb.success && (jdb.found || jdb.hearing)) {
                         lastFetched = { hearing: jdb.hearing, responses: jdb.responses || [], materials: [], uploads: [] };
                         // Persist to local cache for robustness
                         try {
@@ -1023,8 +1030,15 @@
                         displayResponses(lastFetched.responses);
                         // Materials: DB-only attempt, accept only non-empty; otherwise fallback to resilient fetch
                         try {
-                            const rmat = await fetch(`/api/hearing/${encodeURIComponent(hearingId)}/materials?db=1`);
-                            const jmat = await rmat.json().catch(()=>({}));
+                            let jmat = null;
+                            try {
+                                const rp2 = await fetch(`/api/hearing/${encodeURIComponent(hearingId)}/materials?persistOnly=1&t=${Date.now()}`);
+                                jmat = await rp2.json().catch(()=>({}));
+                            } catch {}
+                            if (!jmat || !jmat.success || !isAcceptableMaterials(jmat.materials)) {
+                                const rmat = await fetch(`/api/hearing/${encodeURIComponent(hearingId)}/materials?db=1&t=${Date.now()}`);
+                                jmat = await rmat.json().catch(()=>({}));
+                            }
                             if (jmat && jmat.success && isAcceptableMaterials(jmat.materials)) {
                                 await acceptAndPersistMaterials(hearingId, jmat.materials);
                             } else {
@@ -1159,12 +1173,20 @@
                 try {
                     await fetchWithTimeout(`/api/warm/${encodeURIComponent(hearingId)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' } }, 8000);
                 } catch (_) {}
-                // Poll DB-only aggregate first for quick UI
+                // Poll persisted-only aggregate first for quick UI without triggering network
                 let gotAggregate = false;
                 while (Date.now() - start < maxMs) {
                     try {
-                        const r = await fetchWithTimeout(`/api/hearing/${encodeURIComponent(hearingId)}?db=1&t=${Date.now()}`, { cache: 'no-cache', headers: { 'Cache-Control': 'no-cache' } }, 8000);
-                        const j = await r.json().catch(() => ({}));
+                        // prefer disk-persisted snapshot; fallback to DB-only if none
+                        let j = null;
+                        try {
+                            const rPersist = await fetchWithTimeout(`/api/hearing/${encodeURIComponent(hearingId)}?persistOnly=1&t=${Date.now()}`, { cache: 'no-cache', headers: { 'Cache-Control': 'no-cache' } }, 6000);
+                            j = await rPersist.json().catch(() => ({}));
+                        } catch {}
+                        if (!j || !j.success || !j.found) {
+                            const r = await fetchWithTimeout(`/api/hearing/${encodeURIComponent(hearingId)}?db=1&t=${Date.now()}`, { cache: 'no-cache', headers: { 'Cache-Control': 'no-cache' } }, 6000);
+                            j = await r.json().catch(() => ({}));
+                        }
                         if (j && j.success && j.found && j.hearing) {
                             lastFetched = { hearing: j.hearing, responses: j.responses || [], materials: lastFetched.materials || [], uploads: lastFetched.uploads || [] };
                             // Persist to local cache whenever we refresh
@@ -1187,8 +1209,16 @@
                 const matStart = Date.now();
                 while (Date.now() - matStart < Math.max(20000, maxMs / 2)) {
                     try {
-                        const r2 = await fetchWithTimeout(`/api/hearing/${encodeURIComponent(hearingId)}/materials?db=1&t=${Date.now()}`, { cache: 'no-cache', headers: { 'Cache-Control': 'no-cache' } }, 8000);
-                        const j2 = await r2.json().catch(() => ({}));
+                        // prefer disk-persisted snapshot for materials
+                        let j2 = null;
+                        try {
+                            const r2p = await fetchWithTimeout(`/api/hearing/${encodeURIComponent(hearingId)}/materials?persistOnly=1&t=${Date.now()}`, { cache: 'no-cache', headers: { 'Cache-Control': 'no-cache' } }, 6000);
+                            j2 = await r2p.json().catch(() => ({}));
+                        } catch {}
+                        if (!j2 || !j2.success || !j2.found) {
+                            const r2 = await fetchWithTimeout(`/api/hearing/${encodeURIComponent(hearingId)}/materials?db=1&t=${Date.now()}`, { cache: 'no-cache', headers: { 'Cache-Control': 'no-cache' } }, 6000);
+                            j2 = await r2.json().catch(() => ({}));
+                        }
                         if (j2 && j2.success && isAcceptableMaterials(j2.materials)) {
                             try { await acceptAndPersistMaterials(hearingId, j2.materials); } catch {}
                             break;
