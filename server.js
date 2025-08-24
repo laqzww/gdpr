@@ -4022,6 +4022,24 @@ try { server.keepAliveTimeout = SERVER_KEEP_ALIVE_TIMEOUT_MS; } catch {}
 try { server.headersTimeout = SERVER_HEADERS_TIMEOUT_MS; } catch {}
 try { if (typeof server.requestTimeout !== 'undefined') server.requestTimeout = SERVER_REQUEST_TIMEOUT_MS; } catch {}
 
+// Validate/sanitize cron specs to avoid runtime errors inside node-cron
+function resolveCronSpec(value, fallback) {
+    try {
+        const raw = (typeof value === 'string') ? value.trim() : '';
+        const spec = raw || fallback;
+        if (typeof spec !== 'string' || !spec.trim()) return fallback;
+        if (typeof cron.validate === 'function') {
+            return cron.validate(spec) ? spec : fallback;
+        }
+        // If validate not available, do a simple shape check: at least 5 fields
+        const parts = spec.trim().split(/\s+/);
+        if (parts.length >= 5 && parts.length <= 7) return spec;
+        return fallback;
+    } catch {
+        return fallback;
+    }
+}
+
 server.listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`);
     
@@ -4072,11 +4090,11 @@ server.listen(PORT, () => {
     // Optional cron-based jobs controlled via env
     if ((process.env.CRON_ENABLED || '1') !== '0') {
         try {
-            const indexSpec = process.env.CRON_INDEX_SCHEDULE || '0 */6 * * *';
+            const indexSpec = resolveCronSpec(process.env.CRON_INDEX_SCHEDULE, '0 */6 * * *');
             cron.schedule(indexSpec, () => {
                 warmHearingIndex().catch(() => {});
             });
-            const refreshSpec = process.env.CRON_HEARING_REFRESH || '*/30 * * * *';
+            const refreshSpec = resolveCronSpec(process.env.CRON_HEARING_REFRESH, '*/30 * * * *');
             cron.schedule(refreshSpec, async () => {
                 try {
                     const cutoff = Date.now() - Number(process.env.REFRESH_STALE_MS || 24*60*60*1000);
@@ -4091,7 +4109,7 @@ server.listen(PORT, () => {
             });
 
             // New: refresh only open/active hearings until stable
-            const refreshOpenSpec = process.env.CRON_REFRESH_OPEN_SCHEDULE || '15 */1 * * *';
+            const refreshOpenSpec = resolveCronSpec(process.env.CRON_REFRESH_OPEN_SCHEDULE, '15 */1 * * *');
             cron.schedule(refreshOpenSpec, async () => {
                 try {
                     const ids = await listRefreshTargetHearings();
@@ -4107,7 +4125,7 @@ server.listen(PORT, () => {
             });
 
             // Jobs cleanup
-            const jobCleanupSpec = process.env.CRON_JOBS_CLEANUP || '12 * * * *';
+            const jobCleanupSpec = resolveCronSpec(process.env.CRON_JOBS_CLEANUP, '12 * * * *');
             cron.schedule(jobCleanupSpec, () => {
                 try { cleanupOldJobs(); } catch {}
             });
