@@ -5,6 +5,9 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Blivhørt AI</title>
     <meta name="description" content="Analysér og opsummer høringssvar">
+    <meta http-equiv="Cache-Control" content="no-store, no-cache, must-revalidate, max-age=0">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="/global-styles.css">
     <script src="/js/data-cache.js?v=2"></script>
@@ -867,8 +870,9 @@
     <div id="notifications" style="position: fixed; top: var(--space-md); right: var(--space-md); z-index: 3000;"></div>
 
     <script>
-        // Register service worker
-        if ('serviceWorker' in navigator) {
+        // Register service worker (disabled on this page to avoid caching interfering with API/streaming)
+        const ENABLE_SW = false;
+        if (ENABLE_SW && 'serviceWorker' in navigator) {
             navigator.serviceWorker.register('/service-worker.js')
                 .then(registration => console.log('Service Worker registered'))
                 .catch(error => console.log('Service Worker registration failed:', error));
@@ -888,7 +892,15 @@
             const controller = new AbortController();
             const timerId = setTimeout(() => { try { controller.abort(); } catch {} }, timeoutMs);
             try {
-                const resp = await fetch(resource, { ...options, signal: controller.signal });
+                const headers = new Headers(options.headers || {});
+                try {
+                    headers.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+                    headers.set('Pragma', 'no-cache');
+                    headers.set('Expires', '0');
+                    headers.set('X-Bypass-Cache', '1');
+                } catch {}
+                const fetchOpts = { ...options, cache: 'no-store', headers, signal: controller.signal };
+                const resp = await fetch(resource, fetchOpts);
                 return resp;
             } finally {
                 clearTimeout(timerId);
@@ -1890,7 +1902,7 @@
             // Prefer background mode by default on Render-like environments to avoid long-lived streams being cut
             const bgPart = (bgParam !== null) ? `&bg=${encodeURIComponent(bgParam)}` : '&bg=1';
             const testPart = testParam ? `&test=${encodeURIComponent(testParam)}` : '';
-            const url = `/api/summarize/${hearingId}?n=3&t=${Date.now()}${demoPart}${bgPart}${testPart}`;
+            const url = `/api/summarize/${hearingId}?n=3&nocache=1&t=${Date.now()}${demoPart}${bgPart}${testPart}`;
             const progressEl = document.getElementById('genProgress2');
             let fallbackTimer = null;
             let controller = new AbortController();
@@ -1941,7 +1953,9 @@
                     headers: { 
                         'Accept': 'text/event-stream',
                         'Content-Type': 'application/json',
-                        'Cache-Control': 'no-cache'
+                        'Cache-Control': 'no-cache, no-store, must-revalidate',
+                        'Pragma': 'no-cache',
+                        'X-Bypass-Cache': '1'
                     },
                     cache: 'no-store',
                     signal: controller.signal,
@@ -2184,7 +2198,7 @@
                     }
                 } catch (_) {}
                 // Default to background mode for resilience on proxies that cut long-lived streams
-                const url = `/api/summarize/${hearingId}?n=3&t=${Date.now()}${bgPart}${demoPart}${delayPart}${editsPart}`;
+                const url = `/api/summarize/${hearingId}?n=3&nocache=1&t=${Date.now()}${bgPart}${demoPart}${delayPart}${editsPart}`;
                 const es = new EventSource(url);
                 window.__genEventSource = es;
                 const progressEl = document.getElementById('genProgress2');
@@ -2351,9 +2365,9 @@
                 }
             } catch {}
             setProgress('Opretter baggrundsjob…');
-            const createResp = await fetch(`/api/jobs/summarize/${encodeURIComponent(hearingId)}`, {
-                method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(bodyData)
-            });
+            const createResp = await fetchWithTimeout(`/api/jobs/summarize/${encodeURIComponent(hearingId)}?t=${Date.now()}`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache, no-store, must-revalidate', 'Pragma': 'no-cache', 'X-Bypass-Cache': '1' }, body: JSON.stringify(bodyData), cache: 'no-store'
+            }, 15000);
             const created = await createResp.json().catch(()=>({ success:false }));
             if (!created || !created.success || !created.jobId) throw new Error('Job kunne ikke oprettes');
             const jobId = created.jobId;
@@ -2368,7 +2382,7 @@
             updateGlobalTicker();
 
             async function pollOnce() {
-                const r = await fetch(`/api/jobs/${encodeURIComponent(jobId)}`);
+                const r = await fetchWithTimeout(`/api/jobs/${encodeURIComponent(jobId)}?t=${Date.now()}`, { cache: 'no-store', headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate', 'Pragma': 'no-cache', 'X-Bypass-Cache': '1' } }, 15000);
                 const j = await r.json().catch(()=>({ success:false }));
                 if (!j || !j.success) throw new Error('Jobstatus kunne ikke hentes');
                 setProgress(`Status: ${j.state || ''}`);
@@ -2378,7 +2392,7 @@
                             if (v.phase || v.state) setVariantStatusText(v.id, (v.phase || v.state || '').toString());
                             if (v.done && !seenVariants.has(v.id)) {
                                 try {
-                                    const r2 = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/variant/${encodeURIComponent(v.id)}`);
+                                    const r2 = await fetchWithTimeout(`/api/jobs/${encodeURIComponent(jobId)}/variant/${encodeURIComponent(v.id)}?t=${Date.now()}`, { cache: 'no-store', headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate', 'Pragma': 'no-cache', 'X-Bypass-Cache': '1' } }, 15000);
                                     const j2 = await r2.json().catch(()=>({ success:false }));
                                     if (j2 && j2.success) {
                                         const variantObj = { id: v.id, markdown: j2.markdown || '', summary: j2.summary || '', headings: j2.headings || [] };
@@ -2395,6 +2409,24 @@
                     clearInterval(loop);
                     clearInterval(ticker);
                     try { document.getElementById('genProgress').style.display = 'none'; } catch {}
+                    // Final safety: if any variants are missing from UI, fetch them directly now
+                    try {
+                        const expected = Number(bodyData && bodyData.n ? bodyData.n : 3);
+                        const expectedIds = Array.from({ length: expected }, (_, i) => i + 1);
+                        const have = new Set((lastSummaries || []).map(v => Number(v.id)));
+                        const missing = expectedIds.filter(id => !have.has(id));
+                        for (const id of missing) {
+                            try {
+                                const r2 = await fetch(`/api/jobs/${encodeURIComponent(jobId)}/variant/${encodeURIComponent(id)}`, { headers: { 'Cache-Control': 'no-cache' }, cache: 'no-store' });
+                                const j2 = await r2.json().catch(()=>({ success:false }));
+                                if (j2 && j2.success && (j2.markdown || j2.summary)) {
+                                    const variantObj = { id, markdown: j2.markdown || '', summary: j2.summary || '', headings: j2.headings || [] };
+                                    lastSummaries.push(variantObj);
+                                    renderSummaryVariants(lastSummaries);
+                                }
+                            } catch {}
+                        }
+                    } catch {}
                     showSuccess('Færdig! Vælg den bedste opsummering og download som DOCX.');
                     return true;
                 }
@@ -2453,7 +2485,12 @@
                 try {
                     const mdText = (mdEl && mdEl.textContent) || v.markdown || '';
                     if (mdText) {
-                        renderHeadingPreviewFromMarkdown(v.id, mdText);
+                        const rendered = renderHeadingPreviewFromMarkdown(v.id, mdText);
+                        if (!rendered) {
+                            renderPlainPreviewFromMarkdown(v.id, mdText, v.summary || '');
+                        }
+                    } else if (v.summary) {
+                        renderPlainPreviewFromMarkdown(v.id, '', v.summary);
                     }
                 } catch {}
             });
@@ -2532,7 +2569,7 @@
                 const card = document.querySelector(`[data-variant-id="${id}"]`);
                 if (!card) return;
                 const previewEl = card.querySelector('.summary-preview');
-                if (!previewEl) return;
+                if (!previewEl) return false;
                 const lines = String(markdown||'').split(/\r?\n/);
                 const headings = [];
                 for (const line of lines) {
@@ -2544,6 +2581,7 @@
                         headings.push({ level: lvl, title });
                     }
                 }
+                if (!headings.length) return false;
                 const container = document.createElement('div');
                 container.className = 'heading-list';
                 const stack = [{ level: 0, parent: container }];
@@ -2568,6 +2606,36 @@
                     parent.appendChild(item);
                     stack.push({ level: h.level, parent: childrenEl });
                 }
+                previewEl.innerHTML = '';
+                previewEl.appendChild(container);
+                return true;
+            } catch { return false; }
+        }
+
+        function renderPlainPreviewFromMarkdown(id, markdown, summary) {
+            try {
+                const card = document.querySelector(`[data-variant-id="${id}"]`);
+                if (!card) return;
+                const previewEl = card.querySelector('.summary-preview');
+                if (!previewEl) return;
+                const src = (markdown && markdown.trim().length) ? markdown : (summary || '');
+                let txt = String(src||'');
+                // Very light markdown strip for preview
+                txt = txt.replace(/```[\s\S]*?```/g, '');
+                txt = txt.replace(/^#{1,6}\s+/gm, '');
+                txt = txt.replace(/\*\*([^*]+)\*\*/g, '$1').replace(/\*([^*]+)\*/g, '$1').replace(/_([^_]+)_/g, '$1');
+                txt = txt.replace(/\[(.*?)\]\([^)]*\)/g, '$1');
+                txt = stripCriticMarkup(txt);
+                const maxChars = 1200;
+                if (txt.length > maxChars) txt = txt.slice(0, maxChars) + '…';
+                const paras = txt.split(/\n{2,}/).map(s => s.trim()).filter(Boolean);
+                const container = document.createElement('div');
+                container.className = 'md-content';
+                paras.forEach(p => {
+                    const el = document.createElement('p');
+                    el.textContent = p;
+                    container.appendChild(el);
+                });
                 previewEl.innerHTML = '';
                 previewEl.appendChild(container);
             } catch {}
@@ -2623,10 +2691,11 @@
             const v = lastSummaries.find(x => String(x.id) === sel.value);
             if (!v) { showError('Ugyldigt valg'); return; }
             try {
+                const md = (v.markdown && v.markdown.trim().length) ? v.markdown : (v.summary || '');
                 const resp = await fetch('/api/build-docx', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ markdown: v.markdown, outFileName: `hoering_${lastFetched.hearing.id}_opsummering` })
+                    body: JSON.stringify({ markdown: md, outFileName: `hoering_${lastFetched.hearing.id}_opsummering` })
                 });
                 if (!resp.ok) {
                     const j = await resp.json().catch(()=>({}));
