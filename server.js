@@ -484,13 +484,16 @@ async function createJob(req, hearingId, payload) {
 
     const jobId = `job_${crypto.randomUUID ? crypto.randomUUID() : sha1Hex(String(Math.random()))}`;
     const now = nowMs();
+    // Guard: ensure we only insert a numeric hearing_id (or NULL) to avoid binding issues
+    const hearingIdNum = /^\d+$/.test(String(hearingId)) ? Number(hearingId) : null;
     try {
         sqliteDb.prepare(`INSERT INTO jobs(job_id, hearing_id, state, phase, progress, created_at, updated_at, idempotency_key, input_hash) VALUES (?,?,?,?,?,?,?,?,?)`)
-            .run(jobId, Number(hearingId), 'queued', 'queued', 0, now, now, idemp || null, inputHash || null);
+            .run(jobId, hearingIdNum, 'queued', 'queued', 0, now, now, idemp || null, inputHash || null);
         const insVar = sqliteDb.prepare(`INSERT INTO job_variants(job_id, variant, state, phase, progress, updated_at) VALUES (?,?,?,?,?,?)`);
         for (let i = 1; i <= n; i++) insVar.run(jobId, i, 'queued', 'queued', 0, now);
     } catch (e) {
-        return { error: 'DB insert failed', status: 500 };
+        try { appendEvent(jobId, 'error', 'DB insert failed', { err: e && e.message ? e.message : String(e) }); } catch {}
+        return { error: `DB insert failed${e && e.message ? `: ${e.message}` : ''}`, status: 500 };
     }
 
     appendEvent(jobId, 'info', 'Job created', { hearingId, n });
