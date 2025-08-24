@@ -2171,8 +2171,8 @@
                             if (card) {
                                 setVariantStatusText(obj.id, obj.message || `Status: ${obj.phase}`);
                                 const phase = String(obj.phase||'').toLowerCase();
-                                // Treat early per-variant phases as activity as well to keep the stream alive on slow backends
-                                const isProgress = ['started','thinking','drafting','done','streaming','using-tools','preparing','connecting','queued','queueing'].includes(phase);
+                                // Consider early phases activity as well (creating_job, polling)
+                                const isProgress = ['started','thinking','drafting','done','streaming','using-tools','preparing','connecting','queued','queueing','creating_job','polling'].includes(phase);
                                 if (isProgress) markActivity();
                             } else {
                                 const progressEl = document.getElementById('genProgress2');

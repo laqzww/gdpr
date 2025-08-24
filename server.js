@@ -3781,6 +3781,26 @@ app.post('/api/summarize/:id', express.text({ type: 'application/json', limit: '
                                                     sendEvent('status', { id: variantId, phase: 'polling', message: `Jobstatus: ${status}...` });
 
                                                     if (['completed', 'succeeded', 'done'].includes(status)) {
+                                                        // Retrieve the final output immediately and emit variant, then resolve
+                                                        try {
+                                                            const job = await openai.responses.retrieve(responseId);
+                                                            let text = '';
+                                                            if (job) {
+                                                                if (typeof job.output_text === 'string') text = job.output_text;
+                                                                else if (Array.isArray(job.output_text)) text = job.output_text.join('\n');
+                                                                else if (Array.isArray(job.output)) {
+                                                                    try { text = job.output.map(o => (o?.content||[]).map(c => (c?.text || '')).join('')).join('\n'); } catch (_) {}
+                                                                }
+                                                            }
+                                                            const markdown = (text || '').trim();
+                                                            if (markdown) {
+                                                                const headings = (markdown.match(/^#{1,6} .*$/mg) || []).slice(0, 50);
+                                                                const variant = { id: variantId, headings, markdown, summary: (summaryText || '').trim() };
+                                                                sendEvent('variant', { variant });
+                                                                const finalHeadings = (headings || []).map(h => h.replace(/^#{1,6}\s*/, ''));
+                                                                if (finalHeadings.length) sendEvent('headings', { id: variantId, items: finalHeadings.slice(0, 6) });
+                                                            }
+                                                        } catch (_) {}
                                                         resolvePoll();
                                                     } else if (['failed', 'cancelled', 'error'].includes(status)) {
                                                         rejectPoll(new Error(`Job failed with status: ${status}`));
