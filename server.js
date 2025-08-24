@@ -66,6 +66,11 @@ const PREFETCH_MIN_INTERVAL_MS = Math.max(0, Number(process.env.PREFETCH_MIN_INT
 // In-memory guards to avoid thrashing
 const lastWarmAt = new Map(); // hearingId -> ts
 const prefetchInFlight = new Set(); // hearingId currently prefetching
+
+// Render API configuration (for one-off jobs)
+const RENDER_API_KEY = process.env.RENDER_API_KEY || process.env.RENDER_TOKEN || '';
+const RENDER_SERVICE_ID = process.env.RENDER_SERVICE_ID || process.env.RENDER_SERVICE || '';
+const RENDER_API_BASE = (process.env.RENDER_API_BASE || 'https://api.render.com').replace(/\/$/, '');
 // Background mode default
 function parseBoolean(value) {
     const v = String(value || '').trim().toLowerCase();
@@ -4086,6 +4091,46 @@ app.post('/api/prefetch/:id', async (req, res) => {
     } catch (e) {
         try { prefetchInFlight.delete(String(req.params.id).trim()); } catch {}
         res.status(500).json({ success: false, message: 'Prefetch-fejl', error: e.message });
+    }
+});
+
+// Kick off a one-off job on Render to run our prefetch endpoint.
+// Body: { hearingId: number, apiOnly?: boolean }
+app.post('/api/render-job/prefetch', express.json({ limit: '256kb' }), async (req, res) => {
+    try {
+        const hearingId = Number(req.body?.hearingId);
+        const apiOnly = !!req.body?.apiOnly;
+        if (!Number.isFinite(hearingId)) return res.status(400).json({ success: false, message: 'Ugyldigt hearingId' });
+        if (!RENDER_API_KEY || !RENDER_SERVICE_ID) return res.status(400).json({ success: false, message: 'Render API mangler konfiguration' });
+
+        // Build a job that curls our own endpoint within the same service container
+        // Render will boot a new instance of this service with the provided command
+        const command = `bash -lc "curl -s -X POST ${process.env.PUBLIC_URL || 'http://localhost:'+PORT}/api/prefetch/${hearingId}?apiOnly=${apiOnly?'1':'0'} -H 'Content-Type: application/json' --data '{"reason":"render-job"}' | cat"`;
+        const url = `${RENDER_API_BASE}/v1/services/${encodeURIComponent(RENDER_SERVICE_ID)}/jobs`;
+        const r = await axios.post(url, { command }, { headers: { Authorization: `Bearer ${RENDER_API_KEY}` }, validateStatus: () => true });
+        if (r.status >= 200 && r.status < 300) {
+            return res.json({ success: true, job: r.data });
+        }
+        return res.status(r.status || 500).json({ success: false, message: 'Render job fejlede', error: r.data });
+    } catch (e) {
+        res.status(500).json({ success: false, message: 'Kunne ikke oprette Render job', error: e.message });
+    }
+});
+
+// Create a Render one-off job that hits our refresh-open endpoint to prefetch all target hearings
+app.post('/api/render-job/refresh-open', async (req, res) => {
+    try {
+        if (!RENDER_API_KEY || !RENDER_SERVICE_ID) return res.status(400).json({ success: false, message: 'Render API mangler konfiguration' });
+        const base = (process.env.PUBLIC_URL || '').trim() || `http://localhost:${PORT}`;
+        const command = `bash -lc "curl -sS -X POST '${base}/api/refresh/open' | cat"`;
+        const url = `${RENDER_API_BASE}/v1/services/${encodeURIComponent(RENDER_SERVICE_ID)}/jobs`;
+        const r = await axios.post(url, { command }, { headers: { Authorization: `Bearer ${RENDER_API_KEY}` }, validateStatus: () => true });
+        if (r.status >= 200 && r.status < 300) {
+            return res.json({ success: true, job: r.data });
+        }
+        return res.status(r.status || 500).json({ success: false, message: 'Render job fejlede', error: r.data });
+    } catch (e) {
+        res.status(500).json({ success: false, message: 'Kunne ikke oprette Render job', error: e.message });
     }
 });
 
