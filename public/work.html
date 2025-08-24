@@ -2369,6 +2369,19 @@
         async function startSummarizeViaJobs(hearingId) {
             const progressEl = document.getElementById('genProgress2');
             function setProgress(msg) { try { if (progressEl) progressEl.textContent = msg; } catch {} }
+            // Robust completion detection helpers
+            const COMPLETED_STATES = new Set(['completed','complete','succeeded','success','done','finished','ok']);
+            const isCompletedState = (s) => {
+                try { const val = String(s||'').toLowerCase().trim(); return COMPLETED_STATES.has(val); } catch { return false; }
+            };
+            const coerceVariantId = (id) => {
+                if (typeof id === 'number') return id;
+                if (typeof id === 'string' && id.trim().length) {
+                    const n = parseInt(id, 10);
+                    return Number.isFinite(n) ? n : id.trim();
+                }
+                return id;
+            };
             // Build minimal respondent overrides (same logic as streaming path)
             let bodyData = { n: 3 };
             try {
@@ -2397,7 +2410,7 @@
             setProgress('Opretter baggrundsjob…');
             const createResp = await fetchWithTimeout(`/api/jobs/summarize/${encodeURIComponent(hearingId)}?t=${Date.now()}`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache, no-store, must-revalidate', 'Pragma': 'no-cache', 'X-Bypass-Cache': '1' }, body: JSON.stringify(bodyData), cache: 'no-store'
-            }, 15000);
+            }, 30000);
             const created = await createResp.json().catch(()=>({ success:false }));
             if (!created || !created.success || !created.jobId) throw new Error('Job kunne ikke oprettes');
             const jobId = created.jobId;
@@ -2410,34 +2423,66 @@
             }
             let ticker = setInterval(updateGlobalTicker, 5000);
             updateGlobalTicker();
+            // Timed rescue: if UI hasn't received all variants within a window, fetch them directly
+            const expectedCount = Number((bodyData && bodyData.n) ? bodyData.n : 3);
+            const rescueAfterMs = 45000;
+            let rescueTimer = setTimeout(async () => {
+                try {
+                    const have = new Set((lastSummaries || []).map(v => String(v.id)));
+                    const expectedIds = Array.from({ length: expectedCount }, (_, i) => String(i + 1));
+                    const missing = expectedIds.filter(id => !have.has(id));
+                    for (const id of missing) {
+                        try {
+                            const r2 = await fetchWithTimeout(`/api/jobs/${encodeURIComponent(jobId)}/variant/${encodeURIComponent(id)}?t=${Date.now()}`, { cache: 'no-store', headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate', 'Pragma': 'no-cache', 'X-Bypass-Cache': '1' } }, 60000);
+                            const j2 = await r2.json().catch(()=>({ success:false }));
+                            if (j2 && j2.success) {
+                                const variantObj = { id: coerceVariantId(id), markdown: j2.markdown || '', summary: j2.summary || '', headings: j2.headings || [] };
+                                lastSummaries.push(variantObj);
+                                renderSummaryVariants(lastSummaries);
+                            }
+                        } catch {}
+                    }
+                } catch {}
+            }, rescueAfterMs);
 
             async function pollOnce() {
-                const r = await fetchWithTimeout(`/api/jobs/${encodeURIComponent(jobId)}?t=${Date.now()}`, { cache: 'no-store', headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate', 'Pragma': 'no-cache', 'X-Bypass-Cache': '1' } }, 15000);
+                const r = await fetchWithTimeout(`/api/jobs/${encodeURIComponent(jobId)}?t=${Date.now()}`, { cache: 'no-store', headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate', 'Pragma': 'no-cache', 'X-Bypass-Cache': '1' } }, 30000);
                 const j = await r.json().catch(()=>({ success:false }));
                 if (!j || !j.success) throw new Error('Jobstatus kunne ikke hentes');
                 setProgress(`Status: ${j.state || ''}`);
                 if (Array.isArray(j.variants)) {
                     for (const v of j.variants) {
-                        if (v && Number.isFinite(v.id)) {
-                            if (v.phase || v.state) setVariantStatusText(v.id, (v.phase || v.state || '').toString());
-                            if (v.done && !seenVariants.has(v.id)) {
-                                try {
-                                    const r2 = await fetchWithTimeout(`/api/jobs/${encodeURIComponent(jobId)}/variant/${encodeURIComponent(v.id)}?t=${Date.now()}`, { cache: 'no-store', headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate', 'Pragma': 'no-cache', 'X-Bypass-Cache': '1' } }, 15000);
+                        if (!v) continue;
+                        const vid = coerceVariantId(v.id);
+                        const vidKey = String(vid);
+                        if (v.phase || v.state) setVariantStatusText(vid, (v.phase || v.state || '').toString());
+                        const hasContentInline = (typeof v.markdown === 'string' && v.markdown.trim().length) || (typeof v.summary === 'string' && v.summary.trim().length);
+                        const variantLooksDone = v.done === true || isCompletedState(v.state) || String(v.phase||'').toLowerCase() === 'done' || hasContentInline;
+                        if (variantLooksDone && !seenVariants.has(vidKey)) {
+                            try {
+                                if (hasContentInline) {
+                                    const variantObj = { id: vid, markdown: v.markdown || '', summary: v.summary || '', headings: v.headings || [] };
+                                    lastSummaries.push(variantObj);
+                                    renderSummaryVariants(lastSummaries);
+                                    seenVariants.add(vidKey);
+                                } else {
+                                    const r2 = await fetchWithTimeout(`/api/jobs/${encodeURIComponent(jobId)}/variant/${encodeURIComponent(vidKey)}?t=${Date.now()}`, { cache: 'no-store', headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate', 'Pragma': 'no-cache', 'X-Bypass-Cache': '1' } }, 60000);
                                     const j2 = await r2.json().catch(()=>({ success:false }));
                                     if (j2 && j2.success) {
-                                        const variantObj = { id: v.id, markdown: j2.markdown || '', summary: j2.summary || '', headings: j2.headings || [] };
+                                        const variantObj = { id: vid, markdown: j2.markdown || '', summary: j2.summary || '', headings: j2.headings || [] };
                                         lastSummaries.push(variantObj);
                                         renderSummaryVariants(lastSummaries);
-                                        seenVariants.add(v.id);
+                                        seenVariants.add(vidKey);
                                     }
-                                } catch {}
-                            }
+                                }
+                            } catch {}
                         }
                     }
                 }
-                if (j.state === 'completed') {
+                if (isCompletedState(j.state) || j.done === true || isCompletedState(j.status)) {
                     clearInterval(loop);
                     clearInterval(ticker);
+                    try { clearTimeout(rescueTimer); } catch {}
                     try { document.getElementById('genProgress').style.display = 'none'; } catch {}
                     // Final safety: if any variants are missing from UI, fetch them directly now
                     try {
@@ -2458,12 +2503,15 @@
                         }
                     } catch {}
                     showSuccess('Færdig! Vælg den bedste opsummering og download som DOCX.');
+                    try { document.getElementById('genBtn').disabled = false; } catch {}
                     return true;
                 }
                 if (j.state === 'failed' || j.state === 'cancelled') {
                     clearInterval(loop);
                     clearInterval(ticker);
+                    try { clearTimeout(rescueTimer); } catch {}
                     showError('Job fejlede/blev annulleret.');
+                    try { document.getElementById('genBtn').disabled = false; } catch {}
                     return true;
                 }
                 return false;
