@@ -1988,6 +1988,9 @@ function mergeResponsesPreferFullText(a, b) {
 app.get('/api/hearing/:id', async (req, res) => {
     try {
         const hearingId = String(req.params.id).trim();
+        if (!/^\d+$/.test(hearingId)) {
+            return res.status(400).json({ success: false, message: 'Ugyldigt hørings-ID' });
+        }
         const noCache = String(req.query.nocache || '').trim() === '1';
         const dbOnly = String(req.query.db || '').trim() === '1';
         const persistOnly = String(req.query.persistOnly || '').trim() === '1';
@@ -2204,6 +2207,9 @@ app.get('/api/hearing/:id', async (req, res) => {
 app.get('/api/hearing/:id/meta', async (req, res) => {
     try {
         const hearingId = String(req.params.id).trim();
+        if (!/^\d+$/.test(hearingId)) {
+            return res.status(400).json({ success: false, message: 'Ugyldigt hørings-ID' });
+        }
         const baseUrl = 'https://blivhoert.kk.dk';
         const axiosInstance = axios.create({ headers: { 'User-Agent': 'Mozilla/5.0', 'Cookie': 'kk-xyz=1' }, timeout: 30000 });
 
@@ -2270,6 +2276,9 @@ app.get('/api/hearing/:id/meta', async (req, res) => {
 app.get('/api/hearing/:id/responses', async (req, res) => {
     try {
         const hearingId = String(req.params.id).trim();
+        if (!/^\d+$/.test(hearingId)) {
+            return res.status(400).json({ success: false, message: 'Ugyldigt hørings-ID' });
+        }
         const noCache = String(req.query.nocache || '').trim() === '1';
         const preferPersist = PERSIST_PREFER || String(req.query.persist || '').trim() === '1';
         if (preferPersist) {
@@ -2350,6 +2359,9 @@ app.get('/api/hearing/:id/responses', async (req, res) => {
 app.get('/api/hearing/:id/materials', async (req, res) => {
     try {
         const hearingId = String(req.params.id).trim();
+        if (!/^\d+$/.test(hearingId)) {
+            return res.status(400).json({ success: false, message: 'Ugyldigt hørings-ID' });
+        }
         const noCache = String(req.query.nocache || '').trim() === '1';
         const dbOnly = String(req.query.db || '').trim() === '1';
         const persistOnly = String(req.query.persistOnly || '').trim() === '1';
@@ -2871,6 +2883,10 @@ app.get('/api/summarize/:id', async (req, res) => {
         }
         
         const hearingId = String(req.params.id).trim();
+        if (!/^\d+$/.test(hearingId)) {
+            sendEvent('error', { message: 'Ugyldigt hørings-ID' });
+            return res.end();
+        }
         const providedResponsesMd = null;
         const providedMaterialMd = null;
 
@@ -2924,7 +2940,26 @@ app.get('/api/summarize/:id', async (req, res) => {
                 });
             }
         } catch (_) {}
-        const materials = Array.isArray(metaResp.data?.materials) ? metaResp.data.materials : [];
+        // Ensure materials and responses are populated even if main aggregate lacked them
+        let materials = Array.isArray(metaResp.data?.materials) ? metaResp.data.materials : [];
+        if (!materials.length) {
+            try {
+                const mats = await axios.get(`${base}/api/hearing/${hearingId}/materials?persist=1`, { validateStatus: () => true, timeout: INTERNAL_API_TIMEOUT_MS });
+                if (mats && mats.data && mats.data.success && Array.isArray(mats.data.materials)) materials = mats.data.materials;
+            } catch {}
+            if (!materials.length) {
+                try {
+                    const mats2 = await axios.get(`${base}/api/hearing/${hearingId}/materials?db=1`, { validateStatus: () => true, timeout: INTERNAL_API_TIMEOUT_MS });
+                    if (mats2 && mats2.data && mats2.data.success && Array.isArray(mats2.data.materials)) materials = mats2.data.materials;
+                } catch {}
+            }
+            if (!materials.length) {
+                try {
+                    const mats3 = await axios.get(`${base}/api/hearing/${hearingId}/materials?nocache=1`, { validateStatus: () => true, timeout: INTERNAL_API_TIMEOUT_MS });
+                    if (mats3 && mats3.data && mats3.data.success && Array.isArray(mats3.data.materials)) materials = mats3.data.materials;
+                } catch {}
+            }
+        }
 
         sendEvent('info', { message: 'Forbereder dokumenter...' });
         sendEvent('status', { phase: 'preparing', message: 'Forbereder materiale til prompt…' });
@@ -3459,6 +3494,25 @@ app.post('/api/summarize/:id', express.text({ type: 'application/json', limit: '
                     hearing = metaResp.data.hearing;
                     const responsesRaw = Array.isArray(metaResp.data?.responses) ? metaResp.data.responses : [];
                     materials = Array.isArray(metaResp.data?.materials) ? metaResp.data.materials : [];
+                    // Ensure materials present by probing alternative endpoints when empty
+                    if (!materials || materials.length === 0) {
+                        try {
+                            const mats = await axios.get(`${base}/api/hearing/${hearingId}/materials?persist=1`, { validateStatus: () => true, timeout: INTERNAL_API_TIMEOUT_MS });
+                            if (mats && mats.data && mats.data.success && Array.isArray(mats.data.materials)) materials = mats.data.materials;
+                        } catch {}
+                        if (!materials || materials.length === 0) {
+                            try {
+                                const mats2 = await axios.get(`${base}/api/hearing/${hearingId}/materials?db=1`, { validateStatus: () => true, timeout: INTERNAL_API_TIMEOUT_MS });
+                                if (mats2 && mats2.data && mats2.data.success && Array.isArray(mats2.data.materials)) materials = mats2.data.materials;
+                            } catch {}
+                        }
+                        if (!materials || materials.length === 0) {
+                            try {
+                                const mats3 = await axios.get(`${base}/api/hearing/${hearingId}/materials?nocache=1`, { validateStatus: () => true, timeout: INTERNAL_API_TIMEOUT_MS });
+                                if (mats3 && mats3.data && mats3.data.success && Array.isArray(mats3.data.materials)) materials = mats3.data.materials;
+                            } catch {}
+                        }
+                    }
                     // Apply minimal respondent overrides if provided in body.edits
                     try {
                         const overrides = req.body && req.body.edits && typeof req.body.edits === 'object' ? req.body.edits : null;
@@ -3474,12 +3528,9 @@ app.post('/api/summarize/:id', express.text({ type: 'application/json', limit: '
                                 if (rt !== undefined) { patched.respondentType = rt; patched.respondenttype = rt; }
                                 return patched;
                             });
-                        } else {
-                            responses = responsesRaw;
                         }
-                    } catch (_) {
-                        responses = responsesRaw;
-                    }
+                    } catch (_) {}
+                    
                     sendEvent('info', { message: 'Forbereder dokumenter...' });
                 }
                 
@@ -3884,7 +3935,7 @@ app.post('/api/build-docx', express.json({ limit: '5mb' }), async (req, res) => 
         }
         const tmpDir = ensureTmpDir();
         const outPath = path.join(tmpDir, `${outFileName || 'output'}.docx`);
-        // Prefer Python path
+        // Prefer Python path, but fall back to a Node builder if Python is unavailable
         const python = process.env.PYTHON_BIN || 'python3';
         const scriptPath = path.join(__dirname, 'scripts', 'build_docx.py');
         const templateDocxPath = TEMPLATE_DOCX;
@@ -3906,14 +3957,45 @@ app.post('/api/build-docx', express.json({ limit: '5mb' }), async (req, res) => 
                 child.on('close', code => code === 0 ? resolve(null) : reject(new Error(stderr || `exit ${code}`)));
             } catch (e) { reject(e); }
         });
+        const runNodeFallback = async () => {
+            // Lazy import to avoid adding startup cost
+            let Docx;
+            try { Docx = require('docx'); } catch (e) {
+                throw new Error('docx module not installed');
+            }
+            const { Document, Packer, Paragraph, HeadingLevel, TextRun } = Docx;
+            // Very simple markdown to docx: remove code blocks, split by headings and paragraphs
+            const cleaned = String(markdown || '').replace(/```[\s\S]*?```/g, '').replace(/\r/g, '');
+            const lines = cleaned.split(/\n/);
+            const paragraphs = [];
+            for (const line of lines) {
+                const m = line.match(/^(#{1,6})\s+(.*)$/);
+                if (m) {
+                    const level = Math.min(Math.max(m[1].length, 1), 6);
+                    paragraphs.push(new Paragraph({ text: m[2], heading: [HeadingLevel.HEADING_1, HeadingLevel.HEADING_2, HeadingLevel.HEADING_3, HeadingLevel.HEADING_4, HeadingLevel.HEADING_5, HeadingLevel.HEADING_6][level-1] }));
+                } else if (line.trim().length === 0) {
+                    paragraphs.push(new Paragraph({ text: '' }));
+                } else {
+                    paragraphs.push(new Paragraph({ children: [new TextRun(line)] }));
+                }
+            }
+            const doc = new Document({ sections: [{ properties: {}, children: paragraphs }] });
+            const buffer = await Packer.toBuffer(doc);
+            fs.writeFileSync(outPath, buffer);
+        };
         try {
             await runPython();
-            res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-            res.setHeader('Content-Disposition', `attachment; filename="${path.basename(outPath)}"`);
-            return fs.createReadStream(outPath).pipe(res);
         } catch (pyErr) {
-            return res.status(500).json({ success: false, message: 'DOCX bygning fejlede', error: String(pyErr && pyErr.message || pyErr) });
+            // Fallback to Node builder
+            try {
+                await runNodeFallback();
+            } catch (nodeErr) {
+                return res.status(500).json({ success: false, message: 'DOCX bygning fejlede', error: `python: ${String(pyErr && pyErr.message || pyErr)}; node: ${String(nodeErr && nodeErr.message || nodeErr)}` });
+            }
         }
+        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+        res.setHeader('Content-Disposition', `attachment; filename="${path.basename(outPath)}"`);
+        return fs.createReadStream(outPath).pipe(res);
     } catch (e) {
         res.status(500).json({ success: false, message: 'Fejl ved DOCX bygning', error: e.message });
     }

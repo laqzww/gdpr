@@ -30,37 +30,51 @@ class DataCache {
 
     async _initIndexedDB() {
         return new Promise((resolve, reject) => {
-            const request = indexedDB.open(this.dbName, this.dbVersion);
-            
-            request.onerror = () => reject(request.error);
-            request.onsuccess = () => {
-                this.db = request.result;
-                resolve();
-            };
-            
-            request.onupgradeneeded = (event) => {
-                const db = event.target.result;
-                
-                // Store for search index
-                if (!db.objectStoreNames.contains('searchIndex')) {
-                    db.createObjectStore('searchIndex', { keyPath: 'id' });
-                }
-                
-                // Store for hearing details
-                if (!db.objectStoreNames.contains('hearings')) {
-                    db.createObjectStore('hearings', { keyPath: 'id' });
-                }
-                
-                // Store for hearing responses
-                if (!db.objectStoreNames.contains('responses')) {
-                    db.createObjectStore('responses', { keyPath: 'hearingId' });
-                }
-                
-                // Store for hearing materials
-                if (!db.objectStoreNames.contains('materials')) {
-                    db.createObjectStore('materials', { keyPath: 'hearingId' });
+            // First, try opening without specifying a version to avoid VersionError
+            let triedUpgradeOpen = false;
+            const tryOpenNoVersion = () => {
+                try {
+                    const req = indexedDB.open(this.dbName);
+                    req.onerror = () => {
+                        // Some browsers may require a version; fall back to explicit versioned open
+                        if (!triedUpgradeOpen) { triedUpgradeOpen = true; tryOpenWithVersion(); return; }
+                        reject(req.error);
+                    };
+                    req.onsuccess = () => { this.db = req.result; resolve(); };
+                } catch (_) {
+                    // If open without version is not supported, fall back to versioned open
+                    tryOpenWithVersion();
                 }
             };
+            const tryOpenWithVersion = () => {
+                try {
+                    const request = indexedDB.open(this.dbName, this.dbVersion);
+                    request.onerror = () => reject(request.error);
+                    request.onsuccess = () => { this.db = request.result; resolve(); };
+                    request.onupgradeneeded = (event) => {
+                        const db = event.target.result;
+                        // Store for search index
+                        if (!db.objectStoreNames.contains('searchIndex')) {
+                            db.createObjectStore('searchIndex', { keyPath: 'id' });
+                        }
+                        // Store for hearing details
+                        if (!db.objectStoreNames.contains('hearings')) {
+                            db.createObjectStore('hearings', { keyPath: 'id' });
+                        }
+                        // Store for hearing responses
+                        if (!db.objectStoreNames.contains('responses')) {
+                            db.createObjectStore('responses', { keyPath: 'hearingId' });
+                        }
+                        // Store for hearing materials
+                        if (!db.objectStoreNames.contains('materials')) {
+                            db.createObjectStore('materials', { keyPath: 'hearingId' });
+                        }
+                    };
+                } catch (e) {
+                    reject(e);
+                }
+            };
+            tryOpenNoVersion();
         });
     }
 
@@ -225,7 +239,10 @@ class DataCache {
 
     async getHearing(hearingId) {
         if (this.useIndexedDB) {
-            return await this._getFromIndexedDB('hearings', hearingId);
+            const data = await this._getFromIndexedDB('hearings', hearingId);
+            if (data) return data;
+            // Fallback to backup copy in localStorage
+            return this._getFromLocalStorage(`blivhoert_hearing_${hearingId}`);
         } else {
             return this._getFromLocalStorage(`blivhoert_hearing_${hearingId}`);
         }
@@ -233,9 +250,10 @@ class DataCache {
 
     async setHearing(hearingId, data) {
         const cacheData = { id: hearingId, ...data };
-        
         if (this.useIndexedDB) {
             await this._setToIndexedDB('hearings', cacheData);
+            // Always keep a backup copy for resilience
+            try { this._setToLocalStorage(`blivhoert_hearing_${hearingId}`, cacheData); } catch (_) {}
         } else {
             this._setToLocalStorage(`blivhoert_hearing_${hearingId}`, cacheData);
         }
@@ -244,7 +262,9 @@ class DataCache {
     async getResponses(hearingId) {
         if (this.useIndexedDB) {
             const data = await this._getFromIndexedDB('responses', hearingId);
-            return data ? data.responses : null;
+            if (data && data.responses) return data.responses;
+            const backup = this._getFromLocalStorage(`blivhoert_responses_${hearingId}`);
+            return backup ? backup.responses : null;
         } else {
             const data = this._getFromLocalStorage(`blivhoert_responses_${hearingId}`);
             return data ? data.responses : null;
@@ -253,9 +273,9 @@ class DataCache {
 
     async setResponses(hearingId, responses) {
         const data = { hearingId, responses };
-        
         if (this.useIndexedDB) {
             await this._setToIndexedDB('responses', data);
+            try { this._setToLocalStorage(`blivhoert_responses_${hearingId}`, data); } catch (_) {}
         } else {
             this._setToLocalStorage(`blivhoert_responses_${hearingId}`, data);
         }
@@ -264,7 +284,9 @@ class DataCache {
     async getMaterials(hearingId) {
         if (this.useIndexedDB) {
             const data = await this._getFromIndexedDB('materials', hearingId);
-            return data ? data.materials : null;
+            if (data && data.materials) return data.materials;
+            const backup = this._getFromLocalStorage(`blivhoert_materials_${hearingId}`);
+            return backup ? backup.materials : null;
         } else {
             const data = this._getFromLocalStorage(`blivhoert_materials_${hearingId}`);
             return data ? data.materials : null;
@@ -273,9 +295,9 @@ class DataCache {
 
     async setMaterials(hearingId, materials) {
         const data = { hearingId, materials };
-        
         if (this.useIndexedDB) {
             await this._setToIndexedDB('materials', data);
+            try { this._setToLocalStorage(`blivhoert_materials_${hearingId}`, data); } catch (_) {}
         } else {
             this._setToLocalStorage(`blivhoert_materials_${hearingId}`, data);
         }

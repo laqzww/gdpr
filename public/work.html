@@ -928,6 +928,10 @@
                 const [cleanId] = id.split('?');
                 id = cleanId;
             }
+            // Normalize: ensure numeric string; otherwise null
+            if (id == null) return null;
+            id = String(id).trim();
+            if (!/^\d+$/.test(id)) return null;
             return id;
         }
 
@@ -947,6 +951,12 @@
         });
 
         async function fetchHearingDataById(hearingId) {
+            // Normalize input
+            if (!hearingId || !/^\d+$/.test(String(hearingId))) {
+                const hid = getHearingIdFromUrl();
+                if (!hid) { showError('Ugyldigt hørings-ID angivet'); return; }
+                hearingId = hid;
+            }
             // Avoid blocking overlay on initial attempt; only show overlay if we actually scrape
             let shouldShowOverlay = false;
             // Clear any existing notifications
@@ -1129,7 +1139,7 @@
             // Prefer DB-first and avoid long blocking; then warm and poll if empty
             try {
                 const t = Date.now();
-                const rdb = await fetchWithTimeout(`/api/hearing/${hearingId}/materials?db=1&t=${t}`, { cache: 'no-cache', headers: { 'Cache-Control': 'no-cache' } }, 10000);
+                const rdb = await fetchWithTimeout(`/api/hearing/${encodeURIComponent(hearingId)}/materials?db=1&t=${t}`, { cache: 'no-cache', headers: { 'Cache-Control': 'no-cache' } }, 10000);
                 const jdb = await rdb.json().catch(()=>({}));
                 if (jdb && jdb.success && isAcceptableMaterials(jdb.materials)) {
                     await acceptAndPersistMaterials(hearingId, jdb.materials);
@@ -1140,7 +1150,7 @@
                 await warmAndPoll(hearingId, { showOverlay: false, maxMs: 60000, pollMs: 2500 });
                 // After warm+poll, attempt DB-only again
                 const t2 = Date.now();
-                const r2 = await fetchWithTimeout(`/api/hearing/${hearingId}/materials?db=1&t=${t2}`, { cache: 'no-cache', headers: { 'Cache-Control': 'no-cache' } }, 10000);
+                const r2 = await fetchWithTimeout(`/api/hearing/${encodeURIComponent(hearingId)}/materials?db=1&t=${t2}`, { cache: 'no-cache', headers: { 'Cache-Control': 'no-cache' } }, 10000);
                 const j2 = await r2.json().catch(()=>({}));
                 if (j2 && j2.success && isAcceptableMaterials(j2.materials)) {
                     await acceptAndPersistMaterials(hearingId, j2.materials);
@@ -1266,6 +1276,7 @@
         }
 
         function displayHearingInfo(hearing) {
+            if (!hearing || !hearing.id) return;
             const deadlineText = hearing.deadline ? 
                 new Date(hearing.deadline).toLocaleDateString('da-DK', { 
                     day: '2-digit', 
@@ -1458,7 +1469,7 @@
             if (!lastFetched.materialInclude) lastFetched.materialInclude = [];
             lastFetched.materialInclude[idx] = !!checked;
             try {
-                if (lastFetched.hearing) {
+                if (lastFetched.hearing && lastFetched.hearing.id != null) {
                     fetch(`/api/session/materials/${encodeURIComponent(lastFetched.hearing.id)}`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
@@ -1777,6 +1788,7 @@
 
         async function saveEdit(hearingId, responseId, edit) {
             try {
+                if (!hearingId || !/^\d+$/.test(String(hearingId))) return; // guard against undefined
                 await fetch(`/api/session/edits/${encodeURIComponent(hearingId)}` , {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -1787,6 +1799,7 @@
 
         async function loadEdits(hearingId) {
             try {
+                if (!hearingId || !/^\d+$/.test(String(hearingId))) return {};
                 const r = await fetch(`/api/session/edits/${encodeURIComponent(hearingId)}`);
                 const j = await r.json();
                 return (j && j.success && j.edits) ? j.edits : {};
@@ -1844,7 +1857,7 @@
         }
 
         function generateSummaries() {
-            if (!lastFetched.hearing) { showError('Hent en høring først'); return; }
+            if (!lastFetched.hearing || !/^\d+$/.test(String(lastFetched.hearing.id))) { showError('Hent en høring først'); return; }
             if (!(approvedSteps[1] && approvedSteps[2])) {
                 showError('Du kan først generere, når trin 1 og 2 er godkendt.');
                 return;
@@ -1929,6 +1942,12 @@
         async function startSummarizeViaFetch(hearingId, opts = {}) {
             // Avoid starting this path when Jobs mode is active unless explicitly forced
             try { if (!opts.force && window.__summaryMode === 'jobs') return; } catch(_) {}
+            // Validate id early to prevent /undefined calls
+            if (!hearingId || !/^\d+$/.test(String(hearingId))) {
+                const hid = getHearingIdFromUrl();
+                if (!hid) { showError('Ugyldigt hørings-ID'); return; }
+                hearingId = hid;
+            }
             const usp = new URLSearchParams(window.location.search);
             const demoParam = usp.get('demo');
             const bgParam = usp.get('bg');
@@ -2196,6 +2215,11 @@
             // Avoid starting this path when Jobs mode is active unless explicitly forced
             try { if (!opts.force && window.__summaryMode === 'jobs') return; } catch(_) {}
             try {
+                if (!hearingId || !/^\d+$/.test(String(hearingId))) {
+                    const hid = getHearingIdFromUrl();
+                    if (!hid) { showError('Ugyldigt hørings-ID'); return; }
+                    hearingId = hid;
+                }
                 const usp = new URLSearchParams(window.location.search);
                 const bgParam = usp.get('bg');
                 const demoParam = usp.get('demo');
@@ -2417,6 +2441,11 @@
         async function startSummarizeViaJobs(hearingId) {
             const progressEl = document.getElementById('genProgress2');
             function setProgress(msg) { try { if (progressEl) progressEl.textContent = msg; } catch {} }
+            if (!hearingId || !/^\d+$/.test(String(hearingId))) {
+                const hid = getHearingIdFromUrl();
+                if (!hid) { showError('Ugyldigt hørings-ID'); return; }
+                hearingId = hid;
+            }
             // Robust completion detection helpers
             const COMPLETED_STATES = new Set(['completed','complete','succeeded','success','done','finished','ok']);
             const isCompletedState = (s) => {
