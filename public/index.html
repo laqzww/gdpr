@@ -402,7 +402,8 @@
                     aria-label="Søg efter høring"
                 >
             </div>
-            
+            <div id="suggestions" class="suggestions-dropdown" role="listbox" aria-label="Søgeresultater"></div>
+        </div>
     </section>
     
 
@@ -623,6 +624,9 @@
         
         function displaySuggestions(suggestions) {
             const suggestionsDiv = document.getElementById('suggestions');
+            if (!suggestionsDiv) {
+                return;
+            }
             
             if (suggestions.length === 0) {
                 hideSuggestions();
@@ -673,14 +677,16 @@
         }
         
         function hideSuggestions() {
-            document.getElementById('suggestions').style.display = 'none';
+            const el = document.getElementById('suggestions');
+            if (!el) return;
+            el.style.display = 'none';
             lastSuggestionsKey = '';
         }
         
         function selectHearing(hearingId) {
             // Get the hearing data from the current search results
             const suggestionsDiv = document.getElementById('suggestions');
-            const suggestionItems = suggestionsDiv.querySelectorAll('.suggestion-item');
+            const suggestionItems = suggestionsDiv ? suggestionsDiv.querySelectorAll('.suggestion-item') : [];
             
             // Find the clicked hearing by matching the data-id attribute
             let selectedHearing = null;
