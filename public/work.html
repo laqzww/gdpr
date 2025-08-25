@@ -272,6 +272,7 @@
             display: grid;
             /* Prevent overflow by allowing columns to shrink; maintain 3 columns on wide screens */
             grid-template-columns: repeat(3, minmax(0, 1fr));
+            grid-auto-flow: dense;
             gap: var(--space-lg);
             margin-top: var(--space-xl);
             max-width: 100%;
@@ -300,6 +301,8 @@
             outline: 2px solid var(--color-primary);
             outline-offset: 0;
         }
+        .summary-variant.focused { grid-column: 1 / -1; }
+        .summary-variant:not(.focused) .summary-preview { display: none; }
         
         .summary-variant-header {
             display: flex;
@@ -1938,6 +1941,7 @@
             document.getElementById('genProgress').style.display = 'none';
             window.__genTiming = { t0: performance.now(), connected: null, firstEvent: null, variants: {} };
             window.__variantHasOwnStatus = {};
+            window.__focusedVariantId = 1;
             
             // Abort/close any previous in-flight generation to avoid stale updates
             try { window.__genAbortController && window.__genAbortController.abort(); } catch (_) {}
@@ -2870,8 +2874,11 @@
                 if (!card) {
                     // Create full card with a dedicated status line
                     card = document.createElement('div');
-                    card.className = `summary-variant ${v.id === 1 ? 'selected' : ''}`;
+                    const isFocused = (Number(window.__focusedVariantId || 1) === v.id);
+                    card.className = `summary-variant ${v.id === 1 ? 'selected' : ''} ${isFocused ? 'focused' : ''}`;
                     card.setAttribute('data-variant-id', String(v.id));
+                    card.setAttribute('onclick', `onVariantCardClick(event, ${v.id})`);
+                    card.setAttribute('aria-expanded', isFocused ? 'true' : 'false');
                     card.innerHTML = `
                         <div class="summary-variant-header">
                             <input type="radio" name="summaryChoice" value="${v.id}" ${v.id===1?'checked':''}
@@ -2961,12 +2968,41 @@
             document.querySelector(`[data-variant-id="${id}"]`).classList.add('selected');
         }
 
+        function focusSummaryVariant(id) {
+            try {
+                window.__focusedVariantId = Number(id) || 1;
+                document.querySelectorAll('.summary-variant').forEach(el => {
+                    const isThis = String(el.getAttribute('data-variant-id')) === String(id);
+                    if (isThis) {
+                        el.classList.add('focused');
+                        el.setAttribute('aria-expanded', 'true');
+                    } else {
+                        el.classList.remove('focused');
+                        el.setAttribute('aria-expanded', 'false');
+                    }
+                });
+            } catch {}
+        }
+
+        function onVariantCardClick(event, id) {
+            try {
+                const target = event && event.target;
+                if (target && (target.closest('.summary-radio') || target.closest('label') || target.closest('button') || target.closest('a') || target.closest('input') || target.closest('select') || target.closest('textarea'))) {
+                    return;
+                }
+                focusSummaryVariant(id);
+            } catch {}
+        }
+
         function ensureVariantPlaceholder(id) {
             const content = document.getElementById('summariesContent');
             if (content.querySelector(`[data-variant-id="${id}"]`)) return;
             const div = document.createElement('div');
-            div.className = `summary-variant ${id===1 ? 'selected' : ''}`;
+            const isFocused = (Number(window.__focusedVariantId || 1) === id);
+            div.className = `summary-variant ${id===1 ? 'selected' : ''} ${isFocused ? 'focused' : ''}`;
             div.setAttribute('data-variant-id', String(id));
+            div.setAttribute('onclick', `onVariantCardClick(event, ${id})`);
+            div.setAttribute('aria-expanded', isFocused ? 'true' : 'false');
             div.innerHTML = `
                 <div class="summary-variant-header">
                     <input type="radio" name="summaryChoice" value="${id}" ${id===1?'checked':''} class="summary-radio" onchange="selectSummaryVariant(${id})" />
