@@ -1008,125 +1008,42 @@
             }
 
             try {
-                // Try cache first for instant loading
-                if (window.dataCache) {
-                    const cachedHearing = await window.dataCache.getHearing(hearingId);
-                    const cachedResponses = await window.dataCache.getResponses(hearingId);
-                    
-                    if (cachedHearing && cachedHearing.hearing) {
-                        // Display cached data immediately
-                        lastFetched = { 
-                            hearing: cachedHearing.hearing, 
-                            responses: cachedResponses || cachedHearing.responses || [], 
-                            materials: [], 
-                            uploads: [] 
-                        };
-                        try { await applySavedEdits(); } catch {}
-                        displayHearingInfo(cachedHearing.hearing);
-                        displayResponses(lastFetched.responses);
-                        showLoading(false);
-                        
-                        // Load materials from cache (only accept non-empty); otherwise kick off resilient fetch
-                        const cachedMaterials = await window.dataCache.getMaterials(hearingId);
-                        if (isAcceptableMaterials(cachedMaterials)) {
-                            await acceptAndPersistMaterials(hearingId, cachedMaterials);
-                        } else {
-                            try { await fetchMaterials(hearingId); } catch {}
-                        }
-                        // Load session uploads
-                        try {
-                            const ur = await fetch(`/api/session/uploads/${encodeURIComponent(hearingId)}`);
-                            const uj = await ur.json();
-                            if (uj && uj.success && Array.isArray(uj.files)) {
-                                lastFetched.uploads = uj.files.map(f => ({ url: null, originalName: f.originalName, path: f.path }));
-                                const list = document.getElementById('uploadsList');
-                                if (list) {
-                                    list.innerHTML = '';
-                                    lastFetched.uploads.forEach(u => {
-                                        const item = document.createElement('div');
-                                        item.textContent = `Tilføjet: ${u.originalName}`;
-                                        list.appendChild(item);
-                                    });
-                                }
-                            }
-                        } catch {}
-                        
-                        // Then warm and poll in background to avoid long blocking requests on Render
-                        try { warmAndPoll(hearingId, { showOverlay: false, maxMs: 120000, pollMs: 2500 }); } catch (_) {}
-                        return;
-                    }
-                }
-                
-                // No cache: try persisted-only (non-blocking) first, then DB-only
-                try {
-                    let jPersist = null;
+                // DB-only fetch path
+                const r = await fetch(`/api/hearing/${encodeURIComponent(hearingId)}?t=${Date.now()}&db=1`);
+                const j = await r.json().catch(()=>({}));
+                if (j && j.success && (j.found || j.hearing)) {
+                    lastFetched = { hearing: j.hearing, responses: j.responses || [], materials: [], uploads: [] };
+                    try { await applySavedEdits(); } catch {}
+                    displayHearingInfo(lastFetched.hearing);
+                    displayResponses(lastFetched.responses);
+                    // Materials (DB-only)
                     try {
-                        const rp = await fetch(`/api/hearing/${encodeURIComponent(hearingId)}?persistOnly=1&t=${Date.now()}`);
-                        jPersist = await rp.json().catch(()=>({}));
+                        const rmat = await fetch(`/api/hearing/${encodeURIComponent(hearingId)}/materials?db=1&t=${Date.now()}`);
+                        const jmat = await rmat.json().catch(()=>({}));
+                        if (jmat && jmat.success && isAcceptableMaterials(jmat.materials)) {
+                            await acceptAndPersistMaterials(hearingId, jmat.materials);
+                        }
                     } catch {}
-                    const jdb = (jPersist && jPersist.success && jPersist.found) ? jPersist : await (async () => {
-                        const rdb = await fetch(`/api/hearing/${encodeURIComponent(hearingId)}?db=1&t=${Date.now()}`);
-                        return await rdb.json().catch(()=>({}));
-                    })();
-                    if (jdb && jdb.success && (jdb.found || jdb.hearing)) {
-                        lastFetched = { hearing: jdb.hearing, responses: jdb.responses || [], materials: [], uploads: [] };
-                        // Persist to local cache for robustness
-                        try {
-                            if (window.dataCache) {
-                                await window.dataCache.setHearing(hearingId, { hearing: jdb.hearing });
-                                if (Array.isArray(jdb.responses)) await window.dataCache.setResponses(hearingId, jdb.responses);
+                    // Session uploads
+                    try {
+                        const ur = await fetch(`/api/session/uploads/${encodeURIComponent(hearingId)}`);
+                        const uj = await ur.json();
+                        if (uj && uj.success && Array.isArray(uj.files)) {
+                            lastFetched.uploads = uj.files.map(f => ({ url: null, originalName: f.originalName, path: f.path }));
+                            const list = document.getElementById('uploadsList');
+                            if (list) {
+                                list.innerHTML = '';
+                                lastFetched.uploads.forEach(u => {
+                                    const item = document.createElement('div');
+                                    item.textContent = `Tilføjet: ${u.originalName}`;
+                                    list.appendChild(item);
+                                });
                             }
-                        } catch {}
-                        try { await applySavedEdits(); } catch {}
-                        displayHearingInfo(lastFetched.hearing);
-                        displayResponses(lastFetched.responses);
-                        // Materials: DB-only attempt, accept only non-empty; otherwise fallback to resilient fetch
-                        try {
-                            let jmat = null;
-                            try {
-                                const rp2 = await fetch(`/api/hearing/${encodeURIComponent(hearingId)}/materials?persistOnly=1&t=${Date.now()}`);
-                                jmat = await rp2.json().catch(()=>({}));
-                            } catch {}
-                            if (!jmat || !jmat.success || !isAcceptableMaterials(jmat.materials)) {
-                                const rmat = await fetch(`/api/hearing/${encodeURIComponent(hearingId)}/materials?db=1&t=${Date.now()}`);
-                                jmat = await rmat.json().catch(()=>({}));
-                            }
-                            if (jmat && jmat.success && isAcceptableMaterials(jmat.materials)) {
-                                await acceptAndPersistMaterials(hearingId, jmat.materials);
-                            } else {
-                                try { await fetchMaterials(hearingId); } catch {}
-                            }
-                        } catch { try { await fetchMaterials(hearingId); } catch {} }
-                        // Session uploads
-                        try {
-                            const ur = await fetch(`/api/session/uploads/${encodeURIComponent(hearingId)}`);
-                            const uj = await ur.json();
-                            if (uj && uj.success && Array.isArray(uj.files)) {
-                                lastFetched.uploads = uj.files.map(f => ({ url: null, originalName: f.originalName, path: f.path }));
-                                const list = document.getElementById('uploadsList');
-                                if (list) {
-                                    list.innerHTML = '';
-                                    lastFetched.uploads.forEach(u => {
-                                        const item = document.createElement('div');
-                                        item.textContent = `Tilføjet: ${u.originalName}`;
-                                        list.appendChild(item);
-                                    });
-                                }
-                            }
-                        } catch {}
-                        return; // done
-                    }
-                } catch {}
-
-                // Still nothing: warm on server and poll DB to avoid long blocking fetches
-                shouldShowOverlay = true;
-                if (shouldShowOverlay) showLoading(true);
-                // Try to fetch lightweight meta quickly to show page header
-                try { await fetchMetaFast(hearingId); } catch {}
-                // Hide overlay now; we will update UI when data becomes available
-                showLoading(false);
-                // Trigger warm and start polling persisted/DB state
-                warmAndPoll(hearingId);
+                        }
+                    } catch {}
+                    return;
+                }
+                showError('Data for høringen er ikke scraped endnu. Prøv igen senere.');
                 return;
             } catch (error) {
                 // Gracefully ignore expected aborts from race conditions; otherwise show error
@@ -1181,170 +1098,27 @@
         }
 
         async function fetchMaterials(hearingId) {
-            // Prefer DB-first and avoid long blocking; then warm and poll if empty
             try {
                 const t = Date.now();
                 const rdb = await fetchWithTimeout(`/api/hearing/${encodeURIComponent(hearingId)}/materials?db=1&t=${t}`, { cache: 'no-cache', headers: { 'Cache-Control': 'no-cache' } }, 10000);
                 const jdb = await rdb.json().catch(()=>({}));
                 if (jdb && jdb.success && isAcceptableMaterials(jdb.materials)) {
                     await acceptAndPersistMaterials(hearingId, jdb.materials);
-                    return;
                 }
             } catch (_) {}
-            try {
-                await warmAndPoll(hearingId, { showOverlay: false, maxMs: 60000, pollMs: 2500 });
-                // After warm+poll, attempt DB-only again
-                const t2 = Date.now();
-                const r2 = await fetchWithTimeout(`/api/hearing/${encodeURIComponent(hearingId)}/materials?db=1&t=${t2}`, { cache: 'no-cache', headers: { 'Cache-Control': 'no-cache' } }, 10000);
-                const j2 = await r2.json().catch(()=>({}));
-                if (j2 && j2.success && isAcceptableMaterials(j2.materials)) {
-                    await acceptAndPersistMaterials(hearingId, j2.materials);
-                    return;
-                }
-                // Final fallback: aggregated materials direct with nocache to bypass SW
-                try {
-                    const t3 = Date.now();
-                    const r3 = await fetchWithTimeout(`/api/hearing/${encodeURIComponent(hearingId)}/materials?nocache=1&t=${t3}`, { cache: 'no-cache', headers: { 'Cache-Control': 'no-cache' } }, 15000);
-                    const j3 = await r3.json().catch(()=>({}));
-                    if (j3 && j3.success && isAcceptableMaterials(j3.materials)) {
-                        await acceptAndPersistMaterials(hearingId, j3.materials);
-                        return;
-                    }
-                } catch {}
-            } catch (e) {
-                try { await fetch('/api/client-log', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ level: 'warn', message: 'fetchMaterials warm+poll failed', meta: { hearingId, error: String(e) } }) }); } catch {}
-            }
         }
 
         // Warm on server and poll DB-only endpoints to avoid long blocking calls on slow backends
-        async function warmAndPoll(hearingId, opts = {}) {
-            const start = Date.now();
-            const maxMs = Number(opts.maxMs || 120000);
-            const pollMs = Number(opts.pollMs || 2500);
-            const showOverlay = opts.showOverlay === true;
-            try {
-                if (showOverlay) showLoading(true);
-                // Fire warm request (non-blocking on server)
-                try {
-                    await fetchWithTimeout(`/api/warm/${encodeURIComponent(hearingId)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' } }, 8000);
-                } catch (_) {}
-                // Poll persisted-only aggregate first for quick UI without triggering network
-                let gotAggregate = false;
-                while (Date.now() - start < maxMs) {
-                    try {
-                        // prefer disk-persisted snapshot; fallback to DB-only if none
-                        let j = null;
-                        try {
-                            const rPersist = await fetchWithTimeout(`/api/hearing/${encodeURIComponent(hearingId)}?persistOnly=1&t=${Date.now()}`, { cache: 'no-cache', headers: { 'Cache-Control': 'no-cache' } }, 6000);
-                            j = await rPersist.json().catch(() => ({}));
-                        } catch {}
-                        if (!j || !j.success || !j.found) {
-                            const r = await fetchWithTimeout(`/api/hearing/${encodeURIComponent(hearingId)}?db=1&t=${Date.now()}`, { cache: 'no-cache', headers: { 'Cache-Control': 'no-cache' } }, 6000);
-                            j = await r.json().catch(() => ({}));
-                        }
-                        if (j && j.success && j.found && j.hearing) {
-                            lastFetched = { hearing: j.hearing, responses: j.responses || [], materials: lastFetched.materials || [], uploads: lastFetched.uploads || [] };
-                            // Persist to local cache whenever we refresh
-                            try {
-                                if (window.dataCache) {
-                                    await window.dataCache.setHearing(hearingId, { hearing: j.hearing });
-                                    if (Array.isArray(j.responses)) await window.dataCache.setResponses(hearingId, j.responses);
-                                }
-                            } catch {}
-                            try { await applySavedEdits(); } catch {}
-                            displayHearingInfo(j.hearing);
-                            displayResponses(lastFetched.responses);
-                            gotAggregate = true;
-                            break;
-                        }
-                    } catch (_) {}
-                    await new Promise(res => setTimeout(res, pollMs));
-                }
-                // Poll materials DB-only (optional, but we want to ensure they arrive)
-                const matStart = Date.now();
-                while (Date.now() - matStart < Math.max(40000, maxMs)) {
-                    try {
-                        // prefer disk-persisted snapshot for materials
-                        let j2 = null;
-                        try {
-                            const r2p = await fetchWithTimeout(`/api/hearing/${encodeURIComponent(hearingId)}/materials?persistOnly=1&t=${Date.now()}`, { cache: 'no-cache', headers: { 'Cache-Control': 'no-cache' } }, 6000);
-                            j2 = await r2p.json().catch(() => ({}));
-                        } catch {}
-                        if (!j2 || !j2.success || !j2.found) {
-                            const r2 = await fetchWithTimeout(`/api/hearing/${encodeURIComponent(hearingId)}/materials?db=1&t=${Date.now()}`, { cache: 'no-cache', headers: { 'Cache-Control': 'no-cache' } }, 6000);
-                            j2 = await r2.json().catch(() => ({}));
-                        }
-                        if (j2 && j2.success && isAcceptableMaterials(j2.materials)) {
-                            try { await acceptAndPersistMaterials(hearingId, j2.materials); } catch {}
-                            break;
-                        }
-                    } catch (_) {}
-                    await new Promise(res => setTimeout(res, pollMs));
-                }
-                // Final aggressive fallback for materials: direct nocache fetch even if above loop did not succeed
-                try {
-                    if (!isAcceptableMaterials(lastFetched.materials)) {
-                        const t3 = Date.now();
-                        const r3 = await fetchWithTimeout(`/api/hearing/${encodeURIComponent(hearingId)}/materials?nocache=1&t=${t3}`, { cache: 'no-cache', headers: { 'Cache-Control': 'no-cache' } }, 12000);
-                        const j3 = await r3.json().catch(() => ({}));
-                        if (j3 && j3.success && isAcceptableMaterials(j3.materials)) {
-                            try { await acceptAndPersistMaterials(hearingId, j3.materials); } catch {}
-                        }
-                    }
-                } catch {}
-                if (!gotAggregate) {
-                    // Final fallback: direct aggregate fetch with nocache to bypass SW
-                    try {
-                        const t = Date.now();
-                        const r = await fetchWithTimeout(`/api/hearing/${encodeURIComponent(hearingId)}?nocache=1&t=${t}`, { cache: 'no-store', headers: { 'Cache-Control': 'no-cache' } }, 45000);
-                        const j = await r.json().catch(() => ({}));
-                        if (j && j.success && j.hearing) {
-                            lastFetched = { hearing: j.hearing, responses: j.responses || [], materials: lastFetched.materials || [], uploads: lastFetched.uploads || [] };
-                            try {
-                                if (window.dataCache) {
-                                    await window.dataCache.setHearing(hearingId, { hearing: j.hearing });
-                                    if (Array.isArray(j.responses)) await window.dataCache.setResponses(hearingId, j.responses);
-                                }
-                            } catch {}
-                            try { await applySavedEdits(); } catch {}
-                            displayHearingInfo(j.hearing);
-                            displayResponses(lastFetched.responses);
-                        } else {
-                            // Only notify if nothing is currently shown
-                            try {
-                                const hasHearing = !!(lastFetched && lastFetched.hearing);
-                                if (!hasHearing) {
-                                    showNotification('Data blev ikke klar i tide. Prøv igen om lidt.', 'info');
-                                }
-                            } catch (_) {
-                                showNotification('Data blev ikke klar i tide. Prøv igen om lidt.', 'info');
-                            }
-                        }
-                    } catch {
-                        // Only notify if nothing is currently shown
-                        try {
-                            const hasHearing = !!(lastFetched && lastFetched.hearing);
-                            if (!hasHearing) {
-                                showNotification('Data blev ikke klar i tide. Prøv igen om lidt.', 'info');
-                            }
-                        } catch (_) {
-                            showNotification('Data blev ikke klar i tide. Prøv igen om lidt.', 'info');
-                        }
-                    }
-                }
-            } finally {
-                if (showOverlay) showLoading(false);
-            }
-        }
+        async function warmAndPoll() { /* disabled in DB-only mode */ }
 
         async function refreshFromNetwork() {
             const hearingId = getHearingIdFromUrl();
             if (!hearingId) return showError('Intet hørings-ID angivet');
-            // Prefer warm-and-poll to avoid long network timeouts on Render
+            // DB-only refresh: just re-read from DB
             // Clear any existing notifications
             const notificationsContainer = document.getElementById('notifications');
             if (notificationsContainer) notificationsContainer.innerHTML = '';
-            warmAndPoll(hearingId, { showOverlay: true, maxMs: 90000, pollMs: 3000 });
+            try { await fetchHearingDataById(hearingId); } catch {}
         }
 
         function displayHearingInfo(hearing) {

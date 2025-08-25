@@ -29,7 +29,7 @@ let SQLiteStore;
 try { SQLiteStore = require('connect-sqlite3')(session); }
 catch (_) { SQLiteStore = null; }
 const cron = require('node-cron');
-const { init: initDb, db: sqliteDb, upsertHearing, replaceResponses, replaceMaterials, readAggregate, getSessionEdits, upsertSessionEdit, setMaterialFlag, getMaterialFlags, addUpload, listUploads } = require('./db/sqlite');
+const { init: initDb, db: sqliteDb, upsertHearing, replaceResponses, replaceMaterials, readAggregate, getSessionEdits, upsertSessionEdit, setMaterialFlag, getMaterialFlags, addUpload, listUploads, markHearingComplete, isHearingComplete, setHearingArchived, listHearingsByStatusLike, listAllHearingIds } = require('./db/sqlite');
 
 // OpenAI client (optional). If library or key is missing, summarization endpoints will return an error.
 const openai = OpenAILib && (process.env.OPENAI_API_KEY || process.env.OPENAI_APIKEY || process.env.OPENAI_KEY)
@@ -46,10 +46,12 @@ const CLASSIFY_INTERNAL_TIMEOUT_MS = Number(process.env.CLASSIFY_INTERNAL_TIMEOU
 const SUMMARIZE_TIMEOUT_MS = Number(process.env.SUMMARIZE_TIMEOUT_MS || 1500000);
 // Warmup configuration
 const WARM_ALL_ON_START = String(process.env.WARM_ALL_ON_START || '').toLowerCase() === 'true';
-// Open-hearings refresh configuration
-const REFRESH_TARGET_STATUSES = (process.env.REFRESH_TARGET_STATUSES || 'Afventer konklusion, Aktiv')
+// Open-hearings refresh configuration (only target 'Afventer konklusion')
+const REFRESH_TARGET_STATUSES = (process.env.REFRESH_TARGET_STATUSES || 'Afventer konklusion')
     .split(',')
-    .map(s => s.trim().toLowerCase())
+    .map(s => s.trim())
+    .map(s => s.replace(/^"+|"+$/g, '').replace(/^'+|'+$/g, ''))
+    .map(s => s.toLowerCase())
     .filter(Boolean);
 const REFRESH_MAX_ATTEMPTS = Math.max(1, Number(process.env.REFRESH_MAX_ATTEMPTS || 6));
 const REFRESH_STABLE_REPEATS = Math.max(1, Number(process.env.REFRESH_STABLE_REPEATS || 2));
@@ -1511,35 +1513,26 @@ app.get('/api/hearings', (req, res) => {
         const { q = '' } = req.query;
         const raw = String(q || '').trim();
         const norm = normalizeDanish(raw);
-
-        let results = hearingIndex.slice();
+        // DB-only dataset: only "Afventer konklusion"
+        let results = [];
+        try { results = listHearingsByStatusLike('Afventer konklusion'); } catch {}
         if (norm) {
             const isNumeric = /^\d+$/.test(raw);
-            results = results.filter(hi => {
+            results = results.filter(h => {
                 if (isNumeric) {
-                    if (String(hi.id).includes(raw)) return true;
+                    if (String(h.id).includes(raw)) return true;
                 }
-                if (hi.normalizedTitle.includes(norm)) return true;
-                if (hi.titleTokens.some(t => t.startsWith(norm))) return true;
+                const normTitle = normalizeDanish(String(h.title || ''));
+                if (normTitle.includes(norm)) return true;
                 return false;
             });
         }
-
-        // Restrict index to hearings that are currently 'Aktiv' or 'Afventer konklusion'
-        results = results.filter(hi => {
-            const s = String(hi.status || '').toLowerCase();
-            return s === 'aktiv' || s.includes('afventer konklusion');
-        });
-
-        // Sort: open first, then by deadline asc, then title
         results.sort((a, b) => {
-            if (a.isOpen !== b.isOpen) return a.isOpen ? -1 : 1;
-            const da = a.deadlineTs || Infinity;
-            const db = b.deadlineTs || Infinity;
+            const da = a.deadline ? new Date(a.deadline).getTime() : Infinity;
+            const db = b.deadline ? new Date(b.deadline).getTime() : Infinity;
             if (da !== db) return da - db;
-            return a.title.localeCompare(b.title, 'da');
+            return (a.id || 0) - (b.id || 0);
         });
-
         const out = results.map(h => ({ id: h.id, title: h.title, startDate: h.startDate, deadline: h.deadline, status: h.status }));
         res.json({ success: true, total: out.length, hearings: out });
     } catch (e) {
@@ -2166,72 +2159,16 @@ app.get('/api/hearing/:id', async (req, res) => {
         if (!/^\d+$/.test(hearingId)) {
             return res.status(400).json({ success: false, message: 'Ugyldigt hørings-ID' });
         }
-        const noCache = String(req.query.nocache || '').trim() === '1';
-        const dbOnly = String(req.query.db || '').trim() === '1';
-        const persistOnly = String(req.query.persistOnly || '').trim() === '1';
-        logDebug(`[api/hearing] start id=${hearingId} dbOnly=${dbOnly} noCache=${noCache} persist=${String(req.query.persist||'')}`);
-        if (dbOnly) {
-            try {
-                const fromDb = readAggregate(hearingId);
-                if (fromDb && fromDb.hearing) {
-                    logDebug(`[api/hearing] dbOnly hit id=${hearingId} responses=${(fromDb.responses||[]).length}`);
-                    return res.json({ success: true, found: true, hearing: fromDb.hearing, totalResponses: (fromDb.responses||[]).length, responses: fromDb.responses });
-                }
-                logDebug(`[api/hearing] dbOnly miss id=${hearingId}`);
-                return res.json({ success: true, found: false });
-            } catch (e) {
-                logDebug(`[api/hearing] dbOnly exception id=${hearingId} err=${e && e.message}`);
-                return res.json({ success: true, found: false });
+        // DB-only read path: no network fetches here
+        const fromDb = readAggregate(hearingId);
+        if (fromDb && fromDb.hearing) {
+            // Enforce dataset scope: only serve Afventer konklusion
+            if (!statusMatchesRefreshTargets(fromDb.hearing.status || '')) {
+                return res.status(404).json({ success: false, message: 'Ikke i målgruppen (status)' });
             }
+            return res.json({ success: true, hearing: fromDb.hearing, totalPages: undefined, totalResponses: (fromDb.responses||[]).length, responses: fromDb.responses });
         }
-        // Fast path: serve only from persisted disk cache if requested; never trigger network fetch
-        if (persistOnly) {
-            try {
-                const meta = readPersistedHearingWithMeta(hearingId);
-                const persisted = meta?.data;
-                if (persisted && persisted.success && Array.isArray(persisted.responses) && !isPersistStale(meta)) {
-                    return res.json({ success: true, found: true, hearing: persisted.hearing, totalPages: persisted.totalPages || undefined, totalResponses: persisted.responses.length, responses: persisted.responses });
-                }
-            } catch {}
-            return res.json({ success: true, found: false });
-        }
-        // Prefer persisted on disk if requested or configured and not stale
-        try {
-            const preferPersist = PERSIST_PREFER || String(req.query.persist || '').trim() === '1';
-            if (preferPersist) {
-                const meta = readPersistedHearingWithMeta(hearingId);
-                const persisted = meta?.data;
-                if (persisted && persisted.success && Array.isArray(persisted.responses) && !isPersistStale(meta)) {
-                    logDebug(`[api/hearing] persisted hit id=${hearingId} responses=${persisted.responses.length}`);
-                    return res.json({ success: true, hearing: persisted.hearing, totalPages: persisted.totalPages || undefined, totalResponses: persisted.responses.length, responses: persisted.responses });
-                }
-            }
-        } catch (_) {}
-        // Serve from SQLite first if available
-        try {
-            const fromDb = readAggregate(hearingId);
-            if (!noCache && fromDb && fromDb.hearing) {
-                logDebug(`[api/hearing] sqlite hit id=${hearingId} responses=${(fromDb.responses||[]).length}`);
-                return res.json({ success: true, hearing: fromDb.hearing, totalPages: undefined, totalResponses: (fromDb.responses||[]).length, responses: fromDb.responses });
-            }
-        } catch (_) {}
-        if (!noCache) {
-            const cached = cacheGet(hearingAggregateCache, hearingId);
-            if (cached) { logDebug(`[api/hearing] memory cache hit id=${hearingId} responses=${(cached.responses||[]).length||0}`); return res.json(cached); }
-        }
-        const baseUrl = 'https://blivhoert.kk.dk';
-
-        const axiosInstance = axios.create({
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-                'Accept-Language': 'da-DK,da;q=0.9',
-                'Cookie': 'kk-xyz=1',
-                'Referer': `${baseUrl}/hearing/${hearingId}/comments`,
-                'Origin': baseUrl
-            },
-            timeout: 30000,
-        });
+        return res.status(404).json({ success: false, message: 'Ikke fundet i databasen' });
 
         // Full HTML scrape for all pages, as it's the most reliable source for attachments.
         let htmlResponses = [];
@@ -2361,17 +2298,7 @@ app.get('/api/hearing/:id', async (req, res) => {
             }
         } catch {}
 
-        const payload = {
-            success: true,
-            hearing,
-            totalPages,
-            totalResponses: normalizedResponses.length,
-            responses: normalizedResponses
-        };
-        try { upsertHearing(hearing); replaceResponses(hearing.id, normalizedResponses); } catch (_) {}
-        cacheSet(hearingAggregateCache, hearingId, payload);
-        logDebug(`[api/hearing] success id=${hearingId} responses=${normalizedResponses.length} totalPages=${totalPages}`);
-        res.json(payload);
+        // Unreachable in DB-only mode
     } catch (error) {
         console.error(`Error in /api/hearing/${req.params.id}:`, error.message);
         res.status(500).json({ success: false, message: 'Uventet fejl', error: error.message });
@@ -2537,135 +2464,14 @@ app.get('/api/hearing/:id/materials', async (req, res) => {
         if (!/^\d+$/.test(hearingId)) {
             return res.status(400).json({ success: false, message: 'Ugyldigt hørings-ID' });
         }
-        const noCache = String(req.query.nocache || '').trim() === '1';
-        const dbOnly = String(req.query.db || '').trim() === '1';
-        const persistOnly = String(req.query.persistOnly || '').trim() === '1';
-        logDebug(`[api/materials] start id=${hearingId} dbOnly=${dbOnly} noCache=${noCache} persist=${String(req.query.persist||'')}`);
-        if (dbOnly) {
-            try {
-                const rows = sqliteDb && sqliteDb.prepare ? sqliteDb.prepare(`SELECT * FROM materials WHERE hearing_id=? ORDER BY idx ASC`).all(hearingId) : [];
-                const materials = (rows||[]).map(m => ({ type: m.type, title: m.title, url: m.url, content: m.content }));
-                logDebug(`[api/materials] dbOnly ${materials.length}`);
-                return res.json({ success: true, found: materials.length > 0, materials });
-            } catch {
-                logDebug(`[api/materials] dbOnly exception`);
-                return res.json({ success: true, found: false, materials: [] });
-            }
-        }
-        // Fast path: serve only from persisted disk cache if requested; never trigger network fetch
-        if (persistOnly) {
-            try {
-                const meta = readPersistedHearingWithMeta(hearingId);
-                const persisted = meta?.data;
-                if (persisted && persisted.success && Array.isArray(persisted.materials) && !isPersistStale(meta)) {
-                    logDebug(`[api/materials] persisted-only hit ${persisted.materials.length}`);
-                    return res.json({ success: true, found: true, materials: persisted.materials });
-                }
-            } catch {}
-            return res.json({ success: true, found: false, materials: [] });
-        }
-        const preferPersist = PERSIST_PREFER || String(req.query.persist || '').trim() === '1';
-        if (preferPersist) {
-            const meta = readPersistedHearingWithMeta(hearingId);
-            const persisted = meta?.data;
-            if (persisted && persisted.success && Array.isArray(persisted.materials) && !isPersistStale(meta)) {
-                logDebug(`[api/materials] persisted hit ${persisted.materials.length}`);
-                return res.json({ success: true, materials: persisted.materials });
-            }
-        }
-        if (!noCache) {
-            const cached = cacheGet(hearingMaterialsCache, hearingId);
-            if (cached) { logDebug(`[api/materials] memory cache hit ${(cached.materials||[]).length}`); return res.json(cached); }
-        }
-        const baseUrl = 'https://blivhoert.kk.dk';
-        const axiosInstance = axios.create({ headers: { 'User-Agent': 'Mozilla/5.0', 'Cookie': 'kk-xyz=1', 'Accept-Language': 'da-DK,da;q=0.9', 'Referer': `${baseUrl}/hearing/${hearingId}` }, timeout: 30000 });
-
-        // Primary: parse hearing root page (__NEXT_DATA__)
-        let materials = [];
+        // DB-only
         try {
-            const res1 = await withRetries(() => fetchHearingRootPage(baseUrl, hearingId, axiosInstance), { attempts: 3, baseDelayMs: 600 });
-            materials = res1.materials || [];
-        } catch (_) {}
-
-        // Fallback: JSON API if needed (map field contents; also discover document links)
-        if (!materials.length) {
-            try {
-                const apiUrl = `${baseUrl}/api/hearing/${hearingId}`;
-                const r = await axiosInstance.get(apiUrl, { validateStatus: () => true, headers: { Accept: 'application/json' } });
-                if (r.status === 200 && r.data) {
-                    const data = r.data;
-                    const item = (data?.data && data.data.type === 'hearing') ? data.data : null;
-                    const included = Array.isArray(data?.included) ? data.included : [];
-                    const contentById = new Map();
-                    included.filter(x => x?.type === 'content').forEach(c => contentById.set(String(c.id), c));
-                    const refs = Array.isArray(item?.relationships?.contents?.data) ? item.relationships.contents.data : [];
-                    let combinedText = '';
-                    const discoveredLinks = new Map();
-
-                    function shouldIgnoreExternal(url) {
-                        const u = String(url).toLowerCase();
-                        if (u.includes('klagevejledning')) return true;
-                        if (u.includes('kk.dk/dagsordener-og-referater')) return true;
-                        const isPlanDocPdf = /dokument\.plandata\.dk\/.*\.pdf(\?|$)/i.test(u);
-                        if (isPlanDocPdf) return false;
-                        if (u.includes('plst.dk') || u.includes('plandata.dk') || u.includes('plandata')) return true;
-                        return false;
-                    }
-                    function addLink(url, title) {
-                        if (!url) return;
-                        const clean = String(url).trim();
-                        if (!clean) return;
-                        if (shouldIgnoreExternal(clean)) return;
-                        if (!discoveredLinks.has(clean)) discoveredLinks.set(clean, { title: title || clean });
-                    }
-
-                    for (const ref of refs) {
-                        const cid = ref?.id && String(ref.id);
-                        if (!cid || !contentById.has(cid)) continue;
-                        const c = contentById.get(cid);
-                        const a = c?.attributes || {};
-                        const rel = c?.relationships || {};
-                        const isHearingField = !!(rel?.field?.data?.id);
-                        const isCommentContent = !!(rel?.comment?.data?.id);
-                        if (typeof a.textContent === 'string' && a.textContent.trim() && isHearingField && !isCommentContent) {
-                            const text = a.textContent.trim();
-                            combinedText += (combinedText ? '\n\n' : '') + text;
-                            const mdLinkRe = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g;
-                            let m;
-                            while ((m = mdLinkRe.exec(text)) !== null) addLink(m[2], m[1]);
-                            const urlRe = /(https?:\/\/[^\s)]+)(?![^\[]*\])/g;
-                            let u;
-                            while ((u = urlRe.exec(text)) !== null) addLink(u[1]);
-                        }
-                        if (typeof a.filePath === 'string' && a.filePath.trim() && isHearingField && !isCommentContent) {
-                            const filePath = String(a.filePath).trim();
-                            const fileName = String(a.fileName || '').trim() || (filePath.split('/').pop() || 'Dokument');
-                            materials.push({ type: 'file', title: fileName, url: buildFileUrl(baseUrl, filePath, fileName) });
-                        }
-                    }
-                    if (combinedText.trim()) materials.push({ type: 'description', title: 'Høringstekst', content: fixEncoding(combinedText) });
-                    for (const [url, meta] of discoveredLinks.entries()) {
-                        if (/\.(pdf|doc|docx|xls|xlsx)(\?|$)/i.test(url)) materials.push({ type: 'file', title: meta.title || url, url });
-                    }
-                    // Deduplicate
-                    const seen = new Set();
-                    const deduped = [];
-                    for (const m of materials) {
-                        const key = `${m.type}|${m.title || ''}|${m.url || ''}|${(m.content || '').slice(0,50)}`;
-                        if (seen.has(key)) continue;
-                        seen.add(key);
-                        deduped.push(m);
-                    }
-                    materials = deduped;
-                }
-            } catch (_) {}
+            const rows = sqliteDb && sqliteDb.prepare ? sqliteDb.prepare(`SELECT * FROM materials WHERE hearing_id=? ORDER BY idx ASC`).all(hearingId) : [];
+            const materials = (rows||[]).map(m => ({ type: m.type, title: m.title, url: m.url, content: m.content }));
+            return res.json({ success: true, materials });
+        } catch {
+            return res.json({ success: true, materials: [] });
         }
-
-        const payload = { success: true, materials };
-        try { replaceMaterials(hearingId, materials); } catch (_) {}
-        cacheSet(hearingMaterialsCache, hearingId, payload);
-        logDebug(`[api/materials] success id=${hearingId} materials=${materials.length}`);
-        res.json(payload);
     } catch (e) {
         res.status(500).json({ success: false, message: 'Uventet fejl', error: e.message });
     }
@@ -2688,34 +2494,9 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
 });
 
 // Warm a hearing in background (scrape + persist), non-blocking
+// Warm endpoint disabled in DB-only/static mode (kept for compatibility)
 app.post('/api/warm/:id', async (req, res) => {
-    try {
-        const hearingId = String(req.params.id).trim();
-        logDebug(`[warm] queue id=${hearingId}`);
-        // Prefer lightweight API-only prefetcher to avoid heavy HTML scraping when warming
-        const base = (process.env.PUBLIC_URL || '').trim() || `http://localhost:${PORT}`;
-        const now = Date.now();
-        const last = lastWarmAt.get(hearingId) || 0;
-        if (now - last < WARM_MIN_INTERVAL_MS) {
-            return res.json({ success: true, queued: false, skipped: true, reason: 'debounced' });
-        }
-        lastWarmAt.set(hearingId, now);
-        (async () => {
-            try {
-                if (API_ONLY_PREFETCH) {
-                    await axios.post(`${base}/api/prefetch/${encodeURIComponent(hearingId)}?apiOnly=1`, { reason: 'warm' }, { validateStatus: () => true, timeout: INTERNAL_API_TIMEOUT_MS });
-                } else {
-                    await axios.get(`${base}/api/hearing/${encodeURIComponent(hearingId)}?persist=1&nocache=1`, { validateStatus: () => true, timeout: INTERNAL_API_TIMEOUT_MS });
-                    await axios.get(`${base}/api/hearing/${encodeURIComponent(hearingId)}/materials?persist=1&nocache=1`, { validateStatus: () => true, timeout: INTERNAL_API_TIMEOUT_MS });
-                }
-            } catch (e) {
-                logDebug(`[warm] hearing prefetch failed id=${hearingId} ${e && e.message}`);
-            }
-        })();
-        res.json({ success: true, queued: true });
-    } catch (e) {
-        res.status(500).json({ success: false, message: 'Kunne ikke starte opvarmning' });
-    }
+    return res.json({ success: true, queued: false, skipped: true, reason: 'disabled' });
 });
 
 // Extract text from simple formats to preview (txt, md, docx via python-docx, pdf via pdf-parse)
@@ -4545,39 +4326,22 @@ server.listen(PORT, () => {
     
     // Warm search index after server is listening
     loadIndexFromDisk();
-    warmHearingIndex().catch((err) => {
-        console.error('Error warming hearing index on startup:', err.message);
-    });
-    // Optional: warm all hearings + materials upfront to avoid user waits
-    if (WARM_ALL_ON_START) {
-        (async () => {
-            try {
-                const items = Array.isArray(hearingIndex) ? hearingIndex.slice() : [];
-                const max = Number.isFinite(WARM_MAX_HEARINGS) && WARM_MAX_HEARINGS > 0 ? Math.min(items.length, WARM_MAX_HEARINGS) : items.length;
-                // Only warm hearings that match configured refresh target statuses (mostly static ones too)
-                const queue = items.slice(0, max).filter(h => statusMatchesRefreshTargets(h.status)).map(h => h.id).filter(id => Number.isFinite(id));
-                let active = 0;
-                let idx = 0;
-                const next = async () => {
-                    if (idx >= queue.length) return;
-                    const id = queue[idx++];
-                    active++;
-                    const base = (process.env.PUBLIC_URL || '').trim() || `http://localhost:${PORT}`;
-                    const fetchOnce = async () => {
-                        try { await axios.get(`${base}/api/hearing/${id}?persist=1`, { validateStatus: () => true, timeout: INTERNAL_API_TIMEOUT_MS }); } catch {}
-                        try { await axios.get(`${base}/api/hearing/${id}/materials?persist=1`, { validateStatus: () => true, timeout: INTERNAL_API_TIMEOUT_MS }); } catch {}
-                    };
-                    let attempts = 0;
-                    while (attempts < WARM_RETRY_ATTEMPTS) { attempts++; await fetchOnce(); }
-                    active--;
-                    if (idx < queue.length) next();
-                };
-                for (let i = 0; i < Math.min(WARM_CONCURRENCY, queue.length); i++) next();
-            } catch (e) {
-                console.warn('Warm all on start failed:', e.message);
-            }
-        })();
+    // Build search index from SQLite only at runtime
+    try {
+        if (sqliteDb && sqliteDb.prepare) {
+            const rows = sqliteDb.prepare(`SELECT id,title,start_date as startDate,deadline,status FROM hearings WHERE archived IS NOT 1 AND LOWER(status) LIKE '%' || ? || '%'`).all('afventer konklusion');
+            hearingIndex = (rows || []).map(enrichHearingForIndex);
+        }
+    } catch (e) {
+        console.warn('Index from DB failed at startup:', e && e.message);
     }
+    // On deploy: run a full scrape/hydration once (non-blocking)
+    (async () => {
+        try {
+            const base = (process.env.PUBLIC_URL || '').trim() || `http://localhost:${PORT}`;
+            await axios.post(`${base}/api/run-daily-scrape`, { reason: 'startup' }, { validateStatus: () => true, timeout: 120000 });
+        } catch {}
+    })();
     // Periodic refresh to keep index robust
     const refreshMs = Number(process.env.INDEX_REFRESH_MS || (6 * 60 * 60 * 1000));
     if (Number.isFinite(refreshMs) && refreshMs > 0) {
@@ -4591,56 +4355,146 @@ server.listen(PORT, () => {
     // Optional cron-based jobs controlled via env
     if ((process.env.CRON_ENABLED || '1') !== '0') {
         try {
-            const indexSpec = resolveCronSpec(process.env.CRON_INDEX_SCHEDULE, '0 */6 * * *');
-            cron.schedule(indexSpec, () => {
-                warmHearingIndex().catch(() => {});
-            });
-            const refreshSpec = resolveCronSpec(process.env.CRON_HEARING_REFRESH, '*/30 * * * *');
-            cron.schedule(refreshSpec, async () => {
+            // Daily discovery+hydrate focused on 'Afventer konklusion'
+            const dailySpec = resolveCronSpec(process.env.CRON_DAILY_SCRAPE || '0 3 * * *', '0 3 * * *');
+            cron.schedule(dailySpec, async () => {
                 try {
-                    const cutoff = Date.now() - Number(process.env.REFRESH_STALE_MS || 24*60*60*1000);
-                    if (sqliteDb) {
-                        const rows = sqliteDb.prepare(`SELECT id FROM hearings WHERE updated_at IS NULL OR updated_at < ? LIMIT 50`).all(cutoff);
-                        for (const row of rows) {
-                            try { await axios.get(`http://localhost:${PORT}/api/hearing/${row.id}?nocache=1`); } catch {}
-                            try { await axios.get(`http://localhost:${PORT}/api/hearing/${row.id}/materials?nocache=1`); } catch {}
+                    // Discover
+                    const baseApi = 'https://blivhoert.kk.dk/api/hearing';
+                    let page = 1;
+                    const pageSize = 50;
+                    const ids = [];
+                    for (;;) {
+                        const url = `${baseApi}?PageIndex=${page}&PageSize=${pageSize}`;
+                        const r = await axios.get(url, { validateStatus: () => true });
+                        if (r.status !== 200 || !r.data) break;
+                        const items = Array.isArray(r.data?.data) ? r.data.data : [];
+                        const included = Array.isArray(r.data?.included) ? r.data.included : [];
+                        const statusById = new Map();
+                        for (const inc of included) if (inc?.type === 'hearingStatus') statusById.set(String(inc.id), inc?.attributes?.name || null);
+                        for (const it of items) {
+                            if (!it || it.type !== 'hearing') continue;
+                            const statusRelId = it.relationships?.hearingStatus?.data?.id;
+                            const statusText = statusById.get(String(statusRelId)) || null;
+                            if (String(statusText || '').toLowerCase().includes('afventer konklusion')) {
+                                ids.push(Number(it.id));
+                            }
                         }
+                        const totalPages = r.data?.meta?.Pagination?.totalPages || page;
+                        if (page >= totalPages) break;
+                        page += 1;
                     }
-                } catch {}
-            });
-
-            // New: refresh only open/active hearings until stable
-            const refreshOpenSpec = resolveCronSpec(process.env.CRON_REFRESH_OPEN_SCHEDULE, '15 */1 * * *');
-            cron.schedule(refreshOpenSpec, async () => {
-                try {
-                    const ids = await listRefreshTargetHearings();
+                    const targetIds = Array.from(new Set(ids)).filter(Number.isFinite);
+                    // Archive any hearings in DB not in target set
+                    try {
+                        const existing = listAllHearingIds();
+                        const targetSet = new Set(targetIds);
+                        for (const id of existing) {
+                            if (!targetSet.has(id)) setHearingArchived(id, 1);
+                            else setHearingArchived(id, 0);
+                        }
+                    } catch {}
+                    // Hydrate each target id using prefetch (network), then mark complete
+                    const base = (process.env.PUBLIC_URL || '').trim() || `http://localhost:${PORT}`;
                     let idx = 0;
-                    const workers = new Array(Math.min(REFRESH_CONCURRENCY, Math.max(1, ids.length))).fill(0).map(async () => {
-                        while (idx < ids.length) {
-                            const my = ids[idx++];
-                            await refreshHearingUntilStable(my);
+                    const workers = new Array(Math.min(REFRESH_CONCURRENCY, Math.max(1, targetIds.length))).fill(0).map(async () => {
+                        while (idx < targetIds.length) {
+                            const id = targetIds[idx++];
+                            try {
+                                // Skip if already complete (static dataset)
+                                try { const comp = isHearingComplete(id); if (comp && comp.complete) continue; } catch {}
+                                const r1 = await axios.get(`${base}/api/hearing/${id}?nocache=1`, { validateStatus: () => true, timeout: INTERNAL_API_TIMEOUT_MS });
+                                const r2 = await axios.get(`${base}/api/hearing/${id}/materials?nocache=1`, { validateStatus: () => true, timeout: INTERNAL_API_TIMEOUT_MS });
+                                const hearing = r1.data?.hearing || null;
+                                const responses = Array.isArray(r1.data?.responses) ? r1.data.responses : [];
+                                const materials = Array.isArray(r2.data?.materials) ? r2.data.materials : [];
+                                if (hearing) {
+                                    try { upsertHearing(hearing); replaceResponses(id, responses); replaceMaterials(id, materials); } catch {}
+                                    const sig = snapshotSignature({ responses, materials });
+                                    try { markHearingComplete(id, sig, responses.length, materials.length); } catch {}
+                                }
+                            } catch {}
                         }
                     });
                     await Promise.all(workers);
-                } catch {}
+                    // Rebuild in-memory index from DB
+                    try {
+                        const rows = sqliteDb.prepare(`SELECT id,title,start_date as startDate,deadline,status FROM hearings WHERE archived IS NOT 1 AND LOWER(status) LIKE '%' || ? || '%'`).all('afventer konklusion');
+                        hearingIndex = (rows || []).map(enrichHearingForIndex);
+                    } catch {}
+                } catch (e) {
+                    console.warn('Daily scrape failed:', e && e.message);
+                }
             });
 
-            // Optional: full API-only prefetch for all indexed hearings on a wider cadence
-            const prefetchSpec = resolveCronSpec(process.env.CRON_API_PREFETCH_SCHEDULE, '0 */12 * * *');
-            cron.schedule(prefetchSpec, async () => {
+            // Expose an admin endpoint to trigger daily scrape on demand
+            app.post('/api/run-daily-scrape', async (req, res) => {
                 try {
-                    const items = Array.isArray(hearingIndex) ? hearingIndex.slice() : [];
-                    const ids = items.map(h => h.id).filter(x => Number.isFinite(x));
-                    let cursor = 0;
-                    const runners = new Array(Math.min(PREFETCH_CONCURRENCY, Math.max(1, ids.length))).fill(0).map(async () => {
-                        while (cursor < ids.length) {
-                            const my = ids[cursor++];
-                            try { await axios.post(`http://localhost:${PORT}/api/prefetch/${encodeURIComponent(my)}?apiOnly=1`, { reason: 'cron' }, { validateStatus: () => true, timeout: INTERNAL_API_TIMEOUT_MS }); } catch {}
-                            await sleep(200);
-                        }
-                    });
-                    await Promise.all(runners);
-                } catch {}
+                    await (async () => { try { await axios.post(`http://localhost:${PORT}/__internal/run-daily-scrape`); } catch {} })();
+                    res.json({ success: true, queued: true });
+                } catch (e) {
+                    res.status(500).json({ success: false, message: 'Kunne ikke starte daglig scraping' });
+                }
+            });
+            // Internal endpoint called above to avoid re-creating logic in route handler
+            app.post('/__internal/run-daily-scrape', async (req, res) => {
+                try {
+                    const run = async () => {
+                        try {
+                            const baseApi = 'https://blivhoert.kk.dk/api/hearing';
+                            let page = 1; const pageSize = 50; const ids = [];
+                            for (;;) {
+                                const url = `${baseApi}?PageIndex=${page}&PageSize=${pageSize}`;
+                                const r = await axios.get(url, { validateStatus: () => true });
+                                if (r.status !== 200 || !r.data) break;
+                                const items = Array.isArray(r.data?.data) ? r.data.data : [];
+                                const included = Array.isArray(r.data?.included) ? r.data.included : [];
+                                const statusById = new Map();
+                                for (const inc of included) if (inc?.type === 'hearingStatus') statusById.set(String(inc.id), inc?.attributes?.name || null);
+                                for (const it of items) {
+                                    if (!it || it.type !== 'hearing') continue;
+                                    const statusRelId = it.relationships?.hearingStatus?.data?.id;
+                                    const statusText = statusById.get(String(statusRelId)) || null;
+                                    if (String(statusText || '').toLowerCase().includes('afventer konklusion')) ids.push(Number(it.id));
+                                }
+                                const totalPages = r.data?.meta?.Pagination?.totalPages || page;
+                                if (page >= totalPages) break;
+                                page += 1;
+                            }
+                            const targetIds = Array.from(new Set(ids)).filter(Number.isFinite);
+                            const base = (process.env.PUBLIC_URL || '').trim() || `http://localhost:${PORT}`;
+                            let idx = 0;
+                            const workers = new Array(Math.min(REFRESH_CONCURRENCY, Math.max(1, targetIds.length))).fill(0).map(async () => {
+                                while (idx < targetIds.length) {
+                                    const id = targetIds[idx++];
+                                    try {
+                                        // Skip if already complete (static dataset)
+                                        try { const comp = isHearingComplete(id); if (comp && comp.complete) continue; } catch {}
+                                        const r1 = await axios.get(`${base}/api/hearing/${id}?nocache=1`, { validateStatus: () => true, timeout: INTERNAL_API_TIMEOUT_MS });
+                                        const r2 = await axios.get(`${base}/api/hearing/${id}/materials?nocache=1`, { validateStatus: () => true, timeout: INTERNAL_API_TIMEOUT_MS });
+                                        const hearing = r1.data?.hearing || null;
+                                        const responses = Array.isArray(r1.data?.responses) ? r1.data.responses : [];
+                                        const materials = Array.isArray(r2.data?.materials) ? r2.data.materials : [];
+                                        if (hearing) {
+                                            try { upsertHearing(hearing); replaceResponses(id, responses); replaceMaterials(id, materials); } catch {}
+                                            const sig = snapshotSignature({ responses, materials });
+                                            try { markHearingComplete(id, sig, responses.length, materials.length); } catch {}
+                                        }
+                                    } catch {}
+                                }
+                            });
+                            await Promise.all(workers);
+                            try {
+                                const rows = sqliteDb.prepare(`SELECT id,title,start_date as startDate,deadline,status FROM hearings WHERE archived IS NOT 1 AND LOWER(status) LIKE '%' || ? || '%'`).all('afventer konklusion');
+                                hearingIndex = (rows || []).map(enrichHearingForIndex);
+                            } catch {}
+                        } catch {}
+                    };
+                    setImmediate(() => { run().catch(() => {}); });
+                    res.json({ success: true, queued: true });
+                } catch (e) {
+                    res.status(500).json({ success: false });
+                }
             });
 
             // Jobs cleanup

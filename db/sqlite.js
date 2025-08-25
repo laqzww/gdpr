@@ -104,7 +104,13 @@ function init() {
           start_date TEXT,
           deadline TEXT,
           status TEXT,
-          updated_at INTEGER
+          updated_at INTEGER,
+          complete INTEGER,
+          signature TEXT,
+          total_responses INTEGER,
+          total_materials INTEGER,
+          last_success_at INTEGER,
+          archived INTEGER
         );
         CREATE TABLE IF NOT EXISTS responses(
           hearing_id INTEGER,
@@ -215,6 +221,13 @@ function init() {
         );
         CREATE INDEX IF NOT EXISTS idx_job_events_job ON job_events(job_id, ts);
     `);
+    // Best-effort migrations to add new columns if they don't exist
+    try { db.exec(`ALTER TABLE hearings ADD COLUMN complete INTEGER`); } catch (_) {}
+    try { db.exec(`ALTER TABLE hearings ADD COLUMN signature TEXT`); } catch (_) {}
+    try { db.exec(`ALTER TABLE hearings ADD COLUMN total_responses INTEGER`); } catch (_) {}
+    try { db.exec(`ALTER TABLE hearings ADD COLUMN total_materials INTEGER`); } catch (_) {}
+    try { db.exec(`ALTER TABLE hearings ADD COLUMN last_success_at INTEGER`); } catch (_) {}
+    try { db.exec(`ALTER TABLE hearings ADD COLUMN archived INTEGER`); } catch (_) {}
 }
 
 function upsertHearing(hearing) {
@@ -229,6 +242,36 @@ function upsertHearing(hearing) {
         status=excluded.status,
         updated_at=excluded.updated_at
     `).run({ ...hearing, now });
+}
+
+function markHearingComplete(hearingId, signature, totalResponses, totalMaterials) {
+    const now = Date.now();
+    db.prepare(`UPDATE hearings SET complete=1, signature=?, total_responses=?, total_materials=?, last_success_at=?, updated_at=? WHERE id=?`)
+      .run(signature || null, Number(totalResponses)||0, Number(totalMaterials)||0, now, now, hearingId);
+}
+
+function isHearingComplete(hearingId) {
+    const row = db.prepare(`SELECT complete, signature, total_responses as totalResponses, total_materials as totalMaterials FROM hearings WHERE id=?`).get(hearingId);
+    if (!row) return { complete: false };
+    return { complete: !!row.complete, signature: row.signature || null, totalResponses: row.totalResponses||0, totalMaterials: row.totalMaterials||0 };
+}
+
+function setHearingArchived(hearingId, archived) {
+    const now = Date.now();
+    db.prepare(`UPDATE hearings SET archived=?, updated_at=? WHERE id=?`).run(archived ? 1 : 0, now, hearingId);
+}
+
+function listHearingsByStatusLike(statusLike) {
+    const s = `%${String(statusLike || '').toLowerCase()}%`;
+    return db.prepare(`SELECT id,title,start_date as startDate,deadline,status FROM hearings WHERE archived IS NOT 1 AND LOWER(status) LIKE ? ORDER BY deadline ASC, id ASC`).all(s);
+}
+
+function listIncompleteHearings() {
+    return db.prepare(`SELECT id FROM hearings WHERE archived IS NOT 1 AND (complete IS NULL OR complete=0)`).all().map(r => r.id);
+}
+
+function listAllHearingIds() {
+    return db.prepare(`SELECT id FROM hearings`).all().map(r => r.id);
 }
 
 function replaceResponses(hearingId, responses) {
@@ -347,6 +390,12 @@ module.exports = {
     replaceResponses,
     replaceMaterials,
     readAggregate,
+    markHearingComplete,
+    isHearingComplete,
+    setHearingArchived,
+    listHearingsByStatusLike,
+    listIncompleteHearings,
+    listAllHearingIds,
     getSessionEdits,
     upsertSessionEdit,
     setMaterialFlag,
