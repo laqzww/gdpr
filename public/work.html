@@ -333,6 +333,26 @@
             overflow-y: auto;
         }
 
+        /* Minimal variant badge + spinner */
+        .variant-badge { width: 36px; height: 36px; position: relative; display: inline-grid; place-items: center; }
+        .variant-badge .spinner-ring {
+            width: 32px; height: 32px; border-radius: 50%;
+            border: 3px solid var(--color-gray-300);
+            border-top-color: var(--color-primary);
+            border-right-color: var(--color-primary);
+            animation: spin 0.9s linear infinite;
+        }
+        .summary-variant[data-done="true"] .variant-badge .spinner-ring {
+            border-color: var(--color-success);
+            animation: none;
+        }
+        .variant-badge .spinner-label { font-weight: 700; font-size: 0.9rem; color: var(--color-dark); position: absolute; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .summary-variant[data-error="true"] .variant-badge .spinner-ring { border-color: var(--color-danger); animation: none; }
+        .summary-variant[data-error="true"] .variant-badge .spinner-label { color: var(--color-danger); }
+        .summary-variant.selected[data-error="true"] { border-color: var(--color-danger); box-shadow: 0 0 0 3px rgba(220,53,69,0.25); outline-color: var(--color-danger); }
+        .summary-variant[data-error="true"] { outline-color: var(--color-danger); }
+
         /* Progress indicator */
         .progress-bar {
             background: var(--color-gray-200);
@@ -2005,12 +2025,7 @@
                     ensureVariantPlaceholder(i);
                     const s = document.getElementById(`summary-stream-${i}`);
                     if (s) s.innerHTML = `
-                        <div class="thinking-ticker" aria-live="polite" aria-atomic="true">
-                            <span class="thinking-dot"></span>
-                            <span class="thinking-dot"></span>
-                            <span class="thinking-dot"></span>
-                            <span class="thinking-text">Modellen overvejer…</span>
-                        </div>`;
+                        <div class="thinking-ticker" aria-live="polite" aria-atomic="true"></div>`;
                 }
             } catch (_) {}
 
@@ -2067,19 +2082,13 @@
                 let card = document.querySelector(`[data-variant-id="${id}"]`);
                 if (!card) { ensureVariantPlaceholder(id); card = document.querySelector(`[data-variant-id="${id}"]`); }
                 if (!card) return;
-                const statusEl = card.querySelector('.summary-status');
-                if (!statusEl) return;
-                const ticker = statusEl.querySelector('.thinking-ticker');
-                if (ticker) ticker.remove();
-                const existingDone = statusEl.querySelector('.text-success');
-                if (!existingDone) {
-                    const doneEl = document.createElement('div');
-                    doneEl.className = 'text-success';
-                    doneEl.textContent = 'Færdig';
-                    statusEl.appendChild(doneEl);
-                }
+                // mark as done; spinner ring styling switches to green and stops spinning via CSS
                 try { card.setAttribute('data-done', 'true'); } catch {}
-                try { dedupeDoneIndicatorsForCard(card); } catch {}
+                // remove thinking ticker if present (we don't show text anymore)
+                try {
+                    const statusEl = card.querySelector('.summary-status');
+                    if (statusEl) statusEl.innerHTML = '';
+                } catch {}
             } catch {}
         }
 
@@ -2093,19 +2102,13 @@
             try { if (card.getAttribute('data-done') === 'true') return; } catch {}
             const el = card.querySelector('.summary-status');
             if (!el) return;
+            // Minimal ticker: we avoid text; spinner in header conveys activity
             let ticker = el.querySelector('.thinking-ticker');
             if (!ticker) {
                 el.innerHTML = `
-                    <div class="thinking-ticker" aria-live="polite" aria-atomic="true">
-                        <span class="thinking-dot"></span>
-                        <span class="thinking-dot"></span>
-                        <span class="thinking-dot"></span>
-                        <span class="thinking-text"></span>
-                    </div>`;
+                    <div class="thinking-ticker" aria-live="polite" aria-atomic="true"></div>`;
                 ticker = el.querySelector('.thinking-ticker');
             }
-            const textEl = ticker.querySelector('.thinking-text');
-            if (textEl && typeof message === 'string') textEl.textContent = message;
             const own = !(opts && opts.own === false);
             if (window.__variantHasOwnStatus && typeof id === 'number') {
                 window.__variantHasOwnStatus[id] = own ? true : false;
@@ -2426,16 +2429,14 @@
                             try { obj = JSON.parse(dataStr || '{}'); } catch (_) {}
                             const details = obj && obj.error ? ` (${obj.error})` : '';
                             if (obj && obj.id) {
-                                // Show per-variant error inside the card to avoid hiding other parallel variants
                                 const card = document.querySelector(`[data-variant-id="${obj.id}"]`);
                                 if (card) {
-                                    const el = card.querySelector('.summary-status') || card.querySelector('.summary-preview');
-                                    if (el) {
-                                        const warn = document.createElement('div');
-                                        warn.className = 'text-error';
-                                        warn.textContent = ((obj && obj.message) || 'Fejl under generering.') + details;
-                                        el.parentNode.insertBefore(warn, el.nextSibling);
-                                    }
+                                    // mark visual error state (spinner + border turn red)
+                                    try { card.setAttribute('data-error', 'true'); } catch {}
+                                    try { card.setAttribute('data-done', 'false'); } catch {}
+                                    // keep preview hidden; keep status area minimal (no extra text)
+                                    const el = card.querySelector('.summary-status');
+                                    if (el) el.innerHTML = '';
                                 }
                             } else {
                                 showError(((obj && (obj.message)) || 'Fejl under generering.') + details);
@@ -2923,14 +2924,10 @@
                     card.setAttribute('aria-expanded', isFocused ? 'true' : 'false');
                     card.innerHTML = `
                         <div class="summary-variant-header">
-                            <input type="radio" name="summaryChoice" value="${v.id}" ${v.id===1?'checked':''}
-                                   class="summary-radio" onchange="selectSummaryVariant(${v.id})" />
-                            <h4 class="flex items-center gap-sm">
-                                <svg class="icon" style="color: var(--color-primary);">
-                                    <use href="/icons.svg?v=2#icon-magic"></use>
-                                </svg>
-                                Variant ${v.id}
-                            </h4>
+                            <div class="variant-badge" aria-hidden="true">
+                                <div class="spinner-ring"></div>
+                                <div class="spinner-label">${v.id}</div>
+                            </div>
                         </div>
                         <div class="summary-status" id="summary-stream-${v.id}" style="margin-bottom: var(--space-sm); color: var(--color-gray-600);"></div>
                         <div class="summary-preview"></div>
@@ -3009,10 +3006,6 @@
             });
             const card = document.querySelector(`[data-variant-id="${id}"]`);
             if (card) card.classList.add('selected');
-            try {
-                const radio = document.querySelector(`input.summary-radio[value="${id}"]`);
-                if (radio) radio.checked = true;
-            } catch {}
             focusSummaryVariant(id);
         }
 
@@ -3053,13 +3046,10 @@
             div.setAttribute('aria-expanded', isFocused ? 'true' : 'false');
             div.innerHTML = `
                 <div class="summary-variant-header">
-                    <input type="radio" name="summaryChoice" value="${id}" ${id===1?'checked':''} class="summary-radio" onchange="selectSummaryVariant(${id})" />
-                    <h4 class="flex items-center gap-sm">
-                        <svg class="icon" style="color: var(--color-primary);">
-                            <use href="/icons.svg?v=2#icon-magic"></use>
-                        </svg>
-                        Variant ${id}
-                    </h4>
+                    <div class="variant-badge" aria-hidden="true">
+                        <div class="spinner-ring"></div>
+                        <div class="spinner-label">${id}</div>
+                    </div>
                 </div>
                 <div class="summary-status" id="summary-stream-${id}" style="margin-bottom: var(--space-sm); color: var(--color-gray-600);"></div>
                 <div class="summary-preview"></div>
@@ -3225,9 +3215,10 @@
         }
 
         async function downloadSelectedDocx() {
-            const sel = document.querySelector('input[name="summaryChoice"]:checked');
-            if (!sel) { showError('Vælg en opsummeringsvariant'); return; }
-            const v = lastSummaries.find(x => String(x.id) === sel.value);
+            const focused = document.querySelector('.summary-variant.focused[data-variant-id]');
+            if (!focused) { showError('Vælg en opsummeringsvariant'); return; }
+            const id = focused.getAttribute('data-variant-id');
+            const v = lastSummaries.find(x => String(x.id) === String(id));
             if (!v) { showError('Ugyldigt valg'); return; }
             try {
                 const md = (v.markdown && v.markdown.trim().length) ? v.markdown : (v.summary || '');
