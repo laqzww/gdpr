@@ -306,7 +306,7 @@
         }
         .summary-variant.focused { flex: 1 1 auto; max-width: none; min-width: 0; }
         .summary-variant:not(.focused) .summary-preview { display: none; }
-        .summary-variant:not(.focused):not(.selected) { outline: 1px dashed var(--color-gray-300); }
+        .summary-variant:not(.focused) { outline: 1px dashed var(--color-gray-300); }
         .summary-variant:not(.focused) { cursor: pointer; }
         .summary-variant:not(.focused) .summary-variant-header h4 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         
@@ -1290,10 +1290,26 @@
                             displayHearingInfo(j.hearing);
                             displayResponses(lastFetched.responses);
                         } else {
-                            showError('Data blev ikke klar i tide. Prøv igen om lidt.');
+                            // Only notify if nothing is currently shown
+                            try {
+                                const hasHearing = !!(lastFetched && lastFetched.hearing);
+                                if (!hasHearing) {
+                                    showNotification('Data blev ikke klar i tide. Prøv igen om lidt.', 'info');
+                                }
+                            } catch (_) {
+                                showNotification('Data blev ikke klar i tide. Prøv igen om lidt.', 'info');
+                            }
                         }
                     } catch {
-                        showError('Data blev ikke klar i tide. Prøv igen om lidt.');
+                        // Only notify if nothing is currently shown
+                        try {
+                            const hasHearing = !!(lastFetched && lastFetched.hearing);
+                            if (!hasHearing) {
+                                showNotification('Data blev ikke klar i tide. Prøv igen om lidt.', 'info');
+                            }
+                        } catch (_) {
+                            showNotification('Data blev ikke klar i tide. Prøv igen om lidt.', 'info');
+                        }
                     }
                 }
             } finally {
@@ -1839,7 +1855,11 @@
                     return;
                 }
                 if (data.queued) {
-                    showNotification('Data for høringen var ikke klar. Prøv igen om lidt.', 'info');
+                    // If auto-classify still says queued after retry, only inform if we don't have visible data
+                    const hasResponses = Array.isArray(lastFetched && lastFetched.responses) && lastFetched.responses.length > 0;
+                    if (!hasResponses) {
+                        showNotification('Data for høringen var ikke klar. Prøv igen om lidt.', 'info');
+                    }
                     return;
                 }
                 const suggestions = Array.isArray(data.suggestions) ? data.suggestions : [];
@@ -2987,7 +3007,13 @@
             document.querySelectorAll('.summary-variant').forEach(el => {
                 el.classList.remove('selected');
             });
-            document.querySelector(`[data-variant-id="${id}"]`).classList.add('selected');
+            const card = document.querySelector(`[data-variant-id="${id}"]`);
+            if (card) card.classList.add('selected');
+            try {
+                const radio = document.querySelector(`input.summary-radio[value="${id}"]`);
+                if (radio) radio.checked = true;
+            } catch {}
+            focusSummaryVariant(id);
         }
 
         function focusSummaryVariant(id) {
@@ -3012,7 +3038,7 @@
                 if (target && (target.closest('.summary-radio') || target.closest('label') || target.closest('button') || target.closest('a') || target.closest('input') || target.closest('select') || target.closest('textarea'))) {
                     return;
                 }
-                focusSummaryVariant(id);
+                selectSummaryVariant(id);
             } catch {}
         }
 
