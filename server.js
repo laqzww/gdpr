@@ -4403,16 +4403,7 @@ server.listen(PORT, () => {
                             try {
                                 // Skip if already complete (static dataset)
                                 try { const comp = isHearingComplete(id); if (comp && comp.complete) continue; } catch {}
-                                const r1 = await axios.get(`${base}/api/hearing/${id}?nocache=1`, { validateStatus: () => true, timeout: INTERNAL_API_TIMEOUT_MS });
-                                const r2 = await axios.get(`${base}/api/hearing/${id}/materials?nocache=1`, { validateStatus: () => true, timeout: INTERNAL_API_TIMEOUT_MS });
-                                const hearing = r1.data?.hearing || null;
-                                const responses = Array.isArray(r1.data?.responses) ? r1.data.responses : [];
-                                const materials = Array.isArray(r2.data?.materials) ? r2.data.materials : [];
-                                if (hearing) {
-                                    try { upsertHearing(hearing); replaceResponses(id, responses); replaceMaterials(id, materials); } catch {}
-                                    const sig = snapshotSignature({ responses, materials });
-                                    try { markHearingComplete(id, sig, responses.length, materials.length); } catch {}
-                                }
+                                await hydrateHearingDirect(id);
                             } catch {}
                         }
                     });
@@ -4470,16 +4461,7 @@ server.listen(PORT, () => {
                                     try {
                                         // Skip if already complete (static dataset)
                                         try { const comp = isHearingComplete(id); if (comp && comp.complete) continue; } catch {}
-                                        const r1 = await axios.get(`${base}/api/hearing/${id}?nocache=1`, { validateStatus: () => true, timeout: INTERNAL_API_TIMEOUT_MS });
-                                        const r2 = await axios.get(`${base}/api/hearing/${id}/materials?nocache=1`, { validateStatus: () => true, timeout: INTERNAL_API_TIMEOUT_MS });
-                                        const hearing = r1.data?.hearing || null;
-                                        const responses = Array.isArray(r1.data?.responses) ? r1.data.responses : [];
-                                        const materials = Array.isArray(r2.data?.materials) ? r2.data.materials : [];
-                                        if (hearing) {
-                                            try { upsertHearing(hearing); replaceResponses(id, responses); replaceMaterials(id, materials); } catch {}
-                                            const sig = snapshotSignature({ responses, materials });
-                                            try { markHearingComplete(id, sig, responses.length, materials.length); } catch {}
-                                        }
+                                        await hydrateHearingDirect(id);
                                     } catch {}
                                 }
                             });
@@ -4543,6 +4525,193 @@ function snapshotSignature(s) {
     const firstM = numM ? (s.materials[0]?.title || s.materials[0]?.url || '') : '';
     const lastM = numM ? (s.materials[numM - 1]?.title || s.materials[numM - 1]?.url || '') : '';
     return `${numR}|${firstRid}|${lastRid}::${numM}|${firstM}|${lastM}`;
+}
+
+// Hydrate a hearing directly from Bliv hørt (no HTTP calls to our own endpoints)
+async function hydrateHearingDirect(hearingId) {
+    try {
+        const baseUrl = 'https://blivhoert.kk.dk';
+        const axiosInstance = axios.create({
+            headers: {
+                'User-Agent': 'Mozilla/5.0',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+                'Accept-Language': 'da-DK,da;q=0.9',
+                'Cookie': 'kk-xyz=1',
+                'Referer': `${baseUrl}/hearing/${hearingId}/comments`,
+                'Origin': baseUrl
+            },
+            timeout: 30000,
+            validateStatus: () => true
+        });
+
+        // Fetch responses (HTML + JSON API merge)
+        let htmlResponses = [];
+        let totalPages = 1;
+        try {
+            const first = await withRetries(() => fetchCommentsPage(baseUrl, hearingId, 1, axiosInstance), { attempts: 3, baseDelayMs: 600 });
+            htmlResponses = first.responses || [];
+            totalPages = first.totalPages || 1;
+            if (typeof totalPages === 'number' && totalPages > 1) {
+                const remaining = [];
+                for (let p = 2; p <= totalPages; p += 1) remaining.push(p);
+                const maxConcurrent = 4;
+                let cursor = 0;
+                const workers = new Array(Math.min(maxConcurrent, remaining.length)).fill(0).map(async () => {
+                    while (cursor < remaining.length) {
+                        const myIdx = cursor++;
+                        const p = remaining[myIdx];
+                        const result = await withRetries(() => fetchCommentsPage(baseUrl, hearingId, p, axiosInstance), { attempts: 2, baseDelayMs: 400 });
+                        const pageItems = Array.isArray(result.responses) ? result.responses : [];
+                        if (pageItems.length) htmlResponses = htmlResponses.concat(pageItems);
+                    }
+                });
+                await Promise.all(workers);
+            } else {
+                // Unknown pages fallback
+                let pageIndex = 2;
+                let consecutiveEmpty = 0;
+                let lastFirstId = htmlResponses[0]?.responseNumber ?? null;
+                for (;;) {
+                    const result = await withRetries(() => fetchCommentsPage(baseUrl, hearingId, pageIndex, axiosInstance), { attempts: 2, baseDelayMs: 400 });
+                    const pageItems = Array.isArray(result.responses) ? result.responses : [];
+                    if (!pageItems.length) {
+                        consecutiveEmpty += 1; if (consecutiveEmpty >= 2) break;
+                    } else {
+                        consecutiveEmpty = 0;
+                        const currentFirstId = pageItems[0]?.responseNumber ?? null;
+                        if (lastFirstId !== null && currentFirstId !== null && currentFirstId === lastFirstId) break;
+                        lastFirstId = currentFirstId;
+                        htmlResponses = htmlResponses.concat(pageItems);
+                    }
+                    if (!totalPages && result.totalPages) totalPages = result.totalPages;
+                    pageIndex += 1;
+                    if (pageIndex > 200) break;
+                }
+            }
+        } catch (_) { htmlResponses = []; totalPages = 1; }
+
+        // API fallback for merge
+        let viaApi = { responses: [], totalPages: null };
+        try { viaApi = await fetchCommentsViaApi(`${baseUrl}/api`, hearingId, axiosInstance); } catch {}
+        const merged = mergeResponsesPreferFullText(htmlResponses, viaApi.responses || []);
+        const normalizedResponses = normalizeResponses(merged);
+
+        // Meta via root page (__NEXT_DATA__) then JSON API
+        let hearingMeta = { title: null, deadline: null, startDate: null, status: null };
+        try {
+            const rootPage = await withRetries(() => fetchHearingRootPage(baseUrl, hearingId, axiosInstance), { attempts: 3, baseDelayMs: 600 });
+            if (rootPage.nextJson) hearingMeta = extractMetaFromNextJson(rootPage.nextJson);
+        } catch {}
+        if (!hearingMeta.title || !hearingMeta.deadline || !hearingMeta.startDate || !hearingMeta.status) {
+            try {
+                const apiUrl = `${baseUrl}/api/hearing/${hearingId}`;
+                const r = await axiosInstance.get(apiUrl, { headers: { Accept: 'application/json' } });
+                if (r.status === 200 && r.data) {
+                    const data = r.data;
+                    const item = (data?.data && data.data.type === 'hearing') ? data.data : null;
+                    const included = Array.isArray(data?.included) ? data.included : [];
+                    const contents = included.filter(x => x?.type === 'content');
+                    const titleContent = contents.find(c => String(c?.relationships?.field?.data?.id || '') === '1' && c?.attributes?.textContent);
+                    const attrs = item?.attributes || {};
+                    const statusRelId = item?.relationships?.hearingStatus?.data?.id;
+                    const statusIncluded = included.find(inc => inc.type === 'hearingStatus' && String(inc.id) === String(statusRelId));
+                    hearingMeta = {
+                        title: hearingMeta.title || (titleContent ? fixEncoding(String(titleContent.attributes.textContent).trim()) : null),
+                        deadline: hearingMeta.deadline || attrs.deadline || null,
+                        startDate: hearingMeta.startDate || attrs.startDate || null,
+                        status: hearingMeta.status || statusIncluded?.attributes?.name || null
+                    };
+                }
+            } catch {}
+        }
+        const hearing = {
+            id: Number(hearingId),
+            title: hearingMeta.title || `Høring ${hearingId}`,
+            startDate: hearingMeta.startDate || null,
+            deadline: hearingMeta.deadline || null,
+            status: hearingMeta.status || 'ukendt',
+            url: `${baseUrl}/hearing/${hearingId}/comments`
+        };
+
+        // Materials via root page then JSON API fallback
+        let materials = [];
+        try {
+            const res1 = await withRetries(() => fetchHearingRootPage(baseUrl, hearingId, axiosInstance), { attempts: 3, baseDelayMs: 600 });
+            materials = res1.materials || [];
+        } catch {}
+        if (!materials.length) {
+            try {
+                const apiUrl = `${baseUrl}/api/hearing/${hearingId}`;
+                const r = await axiosInstance.get(apiUrl, { headers: { Accept: 'application/json' } });
+                if (r.status === 200 && r.data) {
+                    const data = r.data;
+                    const item = (data?.data && data.data.type === 'hearing') ? data.data : null;
+                    const included = Array.isArray(data?.included) ? data.included : [];
+                    const contentById = new Map();
+                    included.filter(x => x?.type === 'content').forEach(c => contentById.set(String(c.id), c));
+                    const refs = Array.isArray(item?.relationships?.contents?.data) ? item.relationships.contents.data : [];
+                    let combinedText = '';
+                    const discoveredLinks = new Map();
+                    function shouldIgnoreExternal(url) {
+                        const u = String(url).toLowerCase();
+                        if (u.includes('klagevejledning')) return true;
+                        if (u.includes('kk.dk/dagsordener-og-referater')) return true;
+                        const isPlanDocPdf = /dokument\.plandata\.dk\/.*\.pdf(\?|$)/i.test(u);
+                        if (isPlanDocPdf) return false;
+                        if (u.includes('plst.dk') || u.includes('plandata.dk') || u.includes('plandata')) return true;
+                        return false;
+                    }
+                    function addLink(url, title) {
+                        if (!url) return;
+                        const clean = String(url).trim();
+                        if (!clean) return;
+                        if (shouldIgnoreExternal(clean)) return;
+                        if (!discoveredLinks.has(clean)) discoveredLinks.set(clean, { title: title || clean });
+                    }
+                    for (const ref of refs) {
+                        const cid = ref?.id && String(ref.id);
+                        if (!cid || !contentById.has(cid)) continue;
+                        const c = contentById.get(cid);
+                        const a = c?.attributes || {};
+                        const rel = c?.relationships || {};
+                        const isHearingField = !!(rel?.field?.data?.id);
+                        const isCommentContent = !!(rel?.comment?.data?.id);
+                        if (typeof a.textContent === 'string' && a.textContent.trim() && isHearingField && !isCommentContent) {
+                            const text = a.textContent.trim();
+                            combinedText += (combinedText ? '\n\n' : '') + text;
+                            const mdLinkRe = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g; let m;
+                            while ((m = mdLinkRe.exec(text)) !== null) addLink(m[2], m[1]);
+                            const urlRe = /(https?:\/\/[^\s)]+)(?![^\[]*\])/g; let u;
+                            while ((u = urlRe.exec(text)) !== null) addLink(u[1]);
+                        }
+                        if (typeof a.filePath === 'string' && a.filePath.trim() && isHearingField && !isCommentContent) {
+                            const filePath = String(a.filePath).trim();
+                            const fileName = String(a.fileName || '').trim() || (filePath.split('/').pop() || 'Dokument');
+                            materials.push({ type: 'file', title: fileName, url: buildFileUrl(baseUrl, filePath, fileName) });
+                        }
+                    }
+                    if (combinedText.trim()) materials.push({ type: 'description', title: 'Høringstekst', content: fixEncoding(combinedText) });
+                    for (const [url, meta] of discoveredLinks.entries()) {
+                        if (/\.(pdf|doc|docx|xls|xlsx)(\?|$)/i.test(url)) materials.push({ type: 'file', title: meta.title || url, url });
+                    }
+                    // Deduplicate
+                    const seen = new Set(); const deduped = [];
+                    for (const m of materials) {
+                        const key = `${m.type}|${m.title || ''}|${m.url || ''}|${(m.content || '').slice(0,50)}`;
+                        if (seen.has(key)) continue; seen.add(key); deduped.push(m);
+                    }
+                    materials = deduped;
+                }
+            } catch {}
+        }
+
+        try { upsertHearing(hearing); replaceResponses(hearing.id, normalizedResponses); replaceMaterials(hearing.id, materials); } catch {}
+        const sig = snapshotSignature({ responses: normalizedResponses, materials });
+        try { markHearingComplete(hearing.id, sig, normalizedResponses.length, materials.length); } catch {}
+        return { success: true, hearingId: hearing.id, responses: normalizedResponses.length, materials: materials.length };
+    } catch (e) {
+        return { success: false, error: e && e.message };
+    }
 }
 
 async function refreshHearingUntilStable(hearingId) {
