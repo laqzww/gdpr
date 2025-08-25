@@ -25,7 +25,7 @@ import re
 import hashlib
 from pathlib import Path
 
-try:
+def _bootstrap_paths():
     # Ensure local package directories from PYTHONPATH are on sys.path (handles colon-separated lists)
     try:
         pp = os.environ.get('PYTHONPATH', '')
@@ -40,6 +40,7 @@ try:
     try:
         here = Path(__file__).resolve()
         candidates = [
+            here.parent / 'vendor',
             here.parent.parent / 'python_packages',               # fetcher/python_packages
             here.parent.parent.parent / 'python_packages'          # repo-root/python_packages (if any)
         ]
@@ -53,14 +54,51 @@ try:
                 pass
     except Exception:
         pass
-    import docx as python_docx_module  # python-docx >= 1.2.0 recommended
-    from docx import Document
-    from docx.oxml import OxmlElement
-    from docx.oxml.ns import qn
-    from docx.text.paragraph import Paragraph
-    # No explicit spacing overrides; rely on template styles
-except Exception as e:
-    print(f"FATAL: Mangler python-docx ({e}). Installér med: pip install 'python-docx>=1.2.0'", file=sys.stderr)
+
+
+def _try_runtime_install():
+    try:
+        import subprocess
+        here = Path(__file__).resolve().parent
+        target = here / 'vendor'
+        try:
+            target.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        cmd = [sys.executable, '-m', 'pip', 'install', '--no-cache-dir', '--no-warn-script-location', '--prefer-binary', '--only-binary', ':all:', '--upgrade', '--target', str(target), 'python-docx>=1.2.0', 'lxml<5', 'Pillow>=8.4.0']
+        subprocess.run(cmd, check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if str(target) not in sys.path:
+            sys.path.insert(0, str(target))
+    except Exception:
+        pass
+
+
+def _import_docx_or_die():
+    global python_docx_module, Document, OxmlElement, qn, Paragraph
+    try:
+        import docx as python_docx_module  # python-docx >= 1.2.0 recommended
+        from docx import Document
+        from docx.oxml import OxmlElement
+        from docx.oxml.ns import qn
+        from docx.text.paragraph import Paragraph
+        return True
+    except Exception as e:
+        # One-shot runtime install fallback, then retry
+        _try_runtime_install()
+        try:
+            import docx as python_docx_module
+            from docx import Document
+            from docx.oxml import OxmlElement
+            from docx.oxml.ns import qn
+            from docx.text.paragraph import Paragraph
+            return True
+        except Exception as e2:
+            print(f"FATAL: Mangler python-docx ({e2}). Installér med: pip install 'python-docx>=1.2.0'", file=sys.stderr)
+            return False
+
+
+_bootstrap_paths()
+if not _import_docx_or_die():
     sys.exit(2)
 
 

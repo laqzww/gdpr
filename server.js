@@ -13,6 +13,8 @@ const http = require('http');
 const https = require('https');
 const crypto = require('crypto');
 const { spawn } = require('child_process');
+let DocxLib = null;
+try { DocxLib = require('docx'); } catch (_) { DocxLib = null; }
 // Ensure .env is loaded from this folder, regardless of current working directory
 try {
     require('dotenv').config({ path: path.join(__dirname, '.env') });
@@ -172,6 +174,54 @@ function logDebug(message) {
         try { fs.appendFileSync(LOG_FILE, `${line}\n`); } catch (_) {}
         try { console.log(line); } catch (_) {}
     } catch (_) {}
+}
+
+// Minimal Node.js fallback DOCX builder (used if Python builder fails)
+async function buildDocxFallbackNode(markdown, outPath) {
+    try {
+        if (!DocxLib) return false;
+        const { Document, Packer, Paragraph, HeadingLevel } = DocxLib;
+        const doc = new Document({
+            sections: [{ properties: {}, children: [] }]
+        });
+        const children = [];
+        const lines = String(markdown || '').split(/\r?\n/);
+        for (const raw of lines) {
+            const line = String(raw || '');
+            const m = line.match(/^(#{1,6})\s+(.*)$/);
+            if (m) {
+                const level = Math.min(Math.max(m[1].length, 1), 6);
+                const text = m[2] || '';
+                const headingMap = {
+                    1: HeadingLevel.HEADING_1,
+                    2: HeadingLevel.HEADING_2,
+                    3: HeadingLevel.HEADING_3,
+                    4: HeadingLevel.HEADING_4,
+                    5: HeadingLevel.HEADING_5,
+                    6: HeadingLevel.HEADING_6
+                };
+                children.push(new Paragraph({ text, heading: headingMap[level] }));
+            } else if (line.trim().length === 0) {
+                children.push(new Paragraph({ text: '' }));
+            } else {
+                // Strip basic markdown formatting for readability
+                let text = line
+                    .replace(/```[\s\S]*?```/g, '')
+                    .replace(/^#{1,6}\s+/g, '')
+                    .replace(/\*\*([^*]+)\*\*/g, '$1')
+                    .replace(/\*([^*]+)\*/g, '$1')
+                    .replace(/_([^_]+)_/g, '$1')
+                    .replace(/\[(.*?)\]\([^)]*\)/g, '$1');
+                children.push(new Paragraph({ text }));
+            }
+        }
+        doc.addSection({ properties: {}, children });
+        const buffer = await Packer.toBuffer(doc);
+        fs.writeFileSync(outPath, buffer);
+        return true;
+    } catch (_) {
+        return false;
+    }
 }
 
 // Compute fast pre-thought headings from input to show immediate reasoning summary
@@ -4157,9 +4207,18 @@ app.post('/api/build-docx', express.json({ limit: '5mb' }), async (req, res) => 
         child.stdin.end();
         child.stdout.on('data', d => { stdout += d.toString(); });
         child.stderr.on('data', d => { stderr += d.toString(); });
-        child.on('close', (code) => {
+        child.on('close', async (code) => {
             if (code !== 0) {
                 console.error('DOCX build error:', stderr);
+                // Fallback: build a simple DOCX via Node if Python failed
+                try {
+                    const ok = await buildDocxFallbackNode(markdown, outPath);
+                    if (ok) {
+                        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+                        res.setHeader('Content-Disposition', `attachment; filename="${path.basename(outPath)}"`);
+                        return fs.createReadStream(outPath).pipe(res);
+                    }
+                } catch (_) {}
                 return res.status(500).json({ success: false, message: 'DOCX bygning fejlede', error: stderr || `exit ${code}` });
             }
             res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
@@ -4218,8 +4277,17 @@ app.get('/api/test-docx', async (req, res) => {
         child.stdin.write(markdown);
         child.stdin.end();
         child.stderr.on('data', d => { stderr += d.toString(); });
-        child.on('close', (code) => {
+        child.on('close', async (code) => {
             if (code !== 0) {
+                // Fallback: build a simple DOCX via Node if Python failed
+                try {
+                    const ok = await buildDocxFallbackNode(markdown, outPath);
+                    if (ok) {
+                        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+                        res.setHeader('Content-Disposition', 'attachment; filename="test_output.docx"');
+                        return fs.createReadStream(outPath).pipe(res);
+                    }
+                } catch (_) {}
                 return res.status(500).json({ success: false, message: 'DOCX bygning fejlede', error: stderr || `exit ${code}` });
             }
             res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
