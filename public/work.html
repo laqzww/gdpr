@@ -269,16 +269,17 @@
         }
         
         .summary-variants {
-            display: grid;
-            /* Prevent overflow by allowing columns to shrink; maintain 3 columns on wide screens */
-            grid-template-columns: repeat(3, minmax(0, 1fr));
-            grid-auto-flow: dense;
+            display: flex;
+            flex-wrap: nowrap;
+            align-items: stretch;
             gap: var(--space-lg);
             margin-top: var(--space-xl);
             max-width: 100%;
             margin-left: auto;
             margin-right: auto;
             width: 100%;
+            overflow-x: auto;
+            --collapsed-width: 280px;
         }
         
         .summary-variant {
@@ -287,12 +288,14 @@
             border-radius: var(--radius-lg);
             padding: var(--space-xl);
             transition: all var(--transition-base);
-            width: 100%;
+            width: auto;
             display: flex;
             flex-direction: column;
             /* Allow grid items to shrink within their tracks */
             min-width: 0;
             box-sizing: border-box;
+            flex: 0 0 var(--collapsed-width);
+            max-width: var(--collapsed-width);
         }
         
         .summary-variant.selected {
@@ -301,8 +304,11 @@
             outline: 2px solid var(--color-primary);
             outline-offset: 0;
         }
-        .summary-variant.focused { grid-column: 1 / -1; }
+        .summary-variant.focused { flex: 1 1 auto; max-width: none; min-width: 0; }
         .summary-variant:not(.focused) .summary-preview { display: none; }
+        .summary-variant:not(.focused):not(.selected) { outline: 1px dashed var(--color-gray-300); }
+        .summary-variant:not(.focused) { cursor: pointer; }
+        .summary-variant:not(.focused) .summary-variant-header h4 { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
         
         .summary-variant-header {
             display: flex;
