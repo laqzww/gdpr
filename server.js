@@ -205,6 +205,51 @@ axios.defaults.httpAgent = keepAliveHttpAgent;
 axios.defaults.httpsAgent = keepAliveHttpsAgent;
 axios.defaults.timeout = 30000;
 
+// Ensure Python deps (python-docx, lxml) are available at runtime
+let pythonDepsReadyPromise = null;
+function ensurePythonDeps() {
+    if (pythonDepsReadyPromise) return pythonDepsReadyPromise;
+    pythonDepsReadyPromise = new Promise((resolve) => {
+        const python = process.env.PYTHON_BIN || 'python3';
+        const env = { ...process.env, PYTHONPATH: process.env.PYTHONPATH || path.join(__dirname, 'python_packages') };
+        const testCmd = [ '-c', 'import sys; sys.path.insert(0, "' + path.join(__dirname, 'python_packages').replace(/"/g, '\\"') + '"); import docx; from lxml import etree; print("ok")' ];
+        try {
+            const test = spawn(python, testCmd, { stdio: ['ignore','pipe','pipe'], env });
+            let out = '';
+            let err = '';
+            test.stdout.on('data', d => { out += d.toString(); });
+            test.stderr.on('data', d => { err += d.toString(); });
+            test.on('close', (code) => {
+                if (code === 0 && /ok/.test(out)) {
+                    resolve(true);
+                } else {
+                    // Attempt runtime install using pinned requirements
+                    const reqPath = path.join(__dirname, 'requirements.txt');
+                    const target = path.join(__dirname, 'python_packages');
+                    try { fs.mkdirSync(target, { recursive: true }); } catch {}
+                    const args = ['-m', 'pip', 'install', '--no-cache-dir', '--no-warn-script-location', '--target', target, '-r', reqPath];
+                    const pip = spawn(python, args, { stdio: ['ignore','pipe','pipe'], env });
+                    let pipErr = '';
+                    pip.stderr.on('data', d => { pipErr += d.toString(); });
+                    pip.on('close', () => {
+                        // Re-test regardless of pip exit code; wheels may have been present already
+                        const test2 = spawn(python, testCmd, { stdio: ['ignore','pipe','pipe'], env });
+                        let out2 = '';
+                        test2.stdout.on('data', d => { out2 += d.toString(); });
+                        test2.on('close', (code2) => {
+                            if (code2 === 0 && /ok/.test(out2)) resolve(true);
+                            else resolve(false);
+                        });
+                    });
+                }
+            });
+        } catch (_) {
+            resolve(false);
+        }
+    });
+    return pythonDepsReadyPromise;
+}
+
 // Lightweight in-memory caches (TTL-based) to avoid refetching same hearing repeatedly
 const CACHE_TTL_MS = Number(process.env.CACHE_TTL_MS || 120000); // 2 minutes default
 const CACHE_MAX_ENTRIES = Number(process.env.CACHE_MAX_ENTRIES || 100);
@@ -3866,9 +3911,26 @@ app.post('/api/summarize/:id', express.text({ type: 'application/json', limit: '
                                             clearInterval(poller);
                                         });
 
-                                        logDebug(`[summarize] Variant ${variantId}: Polling complete. Streaming results.`);
-                                        sendEvent('status', { id: variantId, phase: 'streaming', message: 'Job færdigt, henter resultater...' });
-                                        stream = await openai.responses.stream({ response_id: responseId });
+                                        logDebug(`[summarize] Variant ${variantId}: Polling complete. Emitting final result without streaming.`);
+                                        // Do NOT stream by response_id (can TTL). We already emitted variant above if content was present.
+                                        // If no markdown was emitted during completion branch, perform a last retrieve to populate it.
+                                        try {
+                                            if (!markdown || !markdown.trim()) {
+                                                const job = await openai.responses.retrieve(responseId);
+                                                const text = parseOpenAIText(job);
+                                                markdown = (text || '').trim();
+                                            }
+                                        } catch {}
+                                        if (markdown && markdown.trim().length) {
+                                            const headings = (markdown.match(/^#{1,6} .*$/mg) || []).slice(0, 50);
+                                            const variant = { id: variantId, headings, markdown, summary: (summaryText || '').trim() };
+                                            sendEvent('variant', { variant });
+                                            const finalHeadings = (headings || []).map(h => h.replace(/^#{1,6}\s*/, ''));
+                                            if (finalHeadings.length) sendEvent('headings', { id: variantId, items: finalHeadings.slice(0, 6) });
+                                        }
+                                        // Mark done and stop this variant task
+                                        sendEvent('status', { id: variantId, phase: 'done', message: 'Færdig' });
+                                        return;
 
                                     } else {
                                         params.stream = true;
@@ -4006,69 +4068,51 @@ app.post('/api/build-docx', express.json({ limit: '5mb' }), async (req, res) => 
         if (typeof markdown !== 'string' || !markdown.trim()) {
             return res.status(400).json({ success: false, message: 'Missing markdown' });
         }
+        // Ensure python deps
+        try { await ensurePythonDeps(); } catch {}
         const tmpDir = ensureTmpDir();
         const outPath = path.join(tmpDir, `${outFileName || 'output'}.docx`);
-        // Prefer Python path, but fall back to a Node builder if Python is unavailable
+
         const python = process.env.PYTHON_BIN || 'python3';
+        // Always use the canonical builder script
         const scriptPath = path.join(__dirname, 'scripts', 'build_docx.py');
-        const templateDocxPath = TEMPLATE_DOCX;
-        const templateBlockPath = path.join(__dirname, 'templates', 'blok.md');
-        const runPython = async () => new Promise((resolve, reject) => {
-            try {
-                const child = spawn(python, [
-                    scriptPath,
-                    '--markdown', '-',
-                    '--out', outPath,
-                    '--template', templateDocxPath,
-                    '--template-block', templateBlockPath
-                ], { stdio: ['pipe', 'pipe', 'pipe'] });
-                let stderr = '';
-                child.stdin.write(markdown);
-                child.stdin.end();
-                child.stderr.on('data', d => { stderr += d.toString(); });
-                child.on('error', err => reject(err));
-                child.on('close', code => code === 0 ? resolve(null) : reject(new Error(stderr || `exit ${code}`)));
-            } catch (e) { reject(e); }
+        // Prefer scriptskabelon paths for template and block if present; fallback to templates/
+        const blockCandidates = [
+            path.join(__dirname, 'scriptskabelon', 'blok.md'),
+            path.join(__dirname, 'templates', 'blok.md')
+        ];
+        const templateCandidates = [
+            TEMPLATE_DOCX,
+            path.join(__dirname, 'scriptskabelon', 'Bilag 6 Svar på henvendelser i høringsperioden.docx'),
+            path.join(__dirname, 'templates', 'Bilag 6 Svar på henvendelser i høringsperioden.docx')
+        ];
+        const templateBlockPath = blockCandidates.find(p => { try { return fs.existsSync(p); } catch { return false; } }) || blockCandidates[blockCandidates.length - 1];
+        const templateDocxPath = templateCandidates.find(p => { try { return fs.existsSync(p); } catch { return false; } }) || TEMPLATE_DOCX;
+
+        const args = [
+            scriptPath,
+            '--markdown', '-',
+            '--out', outPath,
+            '--template', templateDocxPath,
+            '--template-block', templateBlockPath
+        ];
+        const env = { ...process.env, PYTHONPATH: process.env.PYTHONPATH || path.join(__dirname, 'python_packages') };
+        const child = spawn(python, args, { stdio: ['pipe', 'pipe', 'pipe'], env });
+        let stdout = '';
+        let stderr = '';
+        child.stdin.write(markdown);
+        child.stdin.end();
+        child.stdout.on('data', d => { stdout += d.toString(); });
+        child.stderr.on('data', d => { stderr += d.toString(); });
+        child.on('close', (code) => {
+            if (code !== 0) {
+                console.error('DOCX build error:', stderr);
+                return res.status(500).json({ success: false, message: 'DOCX bygning fejlede', error: stderr || `exit ${code}` });
+            }
+            res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+            res.setHeader('Content-Disposition', `attachment; filename="${path.basename(outPath)}"`);
+            fs.createReadStream(outPath).pipe(res);
         });
-        const runNodeFallback = async () => {
-            // Lazy import to avoid adding startup cost
-            let Docx;
-            try { Docx = require('docx'); } catch (e) {
-                throw new Error('docx module not installed');
-            }
-            const { Document, Packer, Paragraph, HeadingLevel, TextRun } = Docx;
-            // Very simple markdown to docx: remove code blocks, split by headings and paragraphs
-            const cleaned = String(markdown || '').replace(/```[\s\S]*?```/g, '').replace(/\r/g, '');
-            const lines = cleaned.split(/\n/);
-            const paragraphs = [];
-            for (const line of lines) {
-                const m = line.match(/^(#{1,6})\s+(.*)$/);
-                if (m) {
-                    const level = Math.min(Math.max(m[1].length, 1), 6);
-                    paragraphs.push(new Paragraph({ text: m[2], heading: [HeadingLevel.HEADING_1, HeadingLevel.HEADING_2, HeadingLevel.HEADING_3, HeadingLevel.HEADING_4, HeadingLevel.HEADING_5, HeadingLevel.HEADING_6][level-1] }));
-                } else if (line.trim().length === 0) {
-                    paragraphs.push(new Paragraph({ text: '' }));
-                } else {
-                    paragraphs.push(new Paragraph({ children: [new TextRun(line)] }));
-                }
-            }
-            const doc = new Document({ sections: [{ properties: {}, children: paragraphs }] });
-            const buffer = await Packer.toBuffer(doc);
-            fs.writeFileSync(outPath, buffer);
-        };
-        try {
-            await runPython();
-        } catch (pyErr) {
-            // Fallback to Node builder
-            try {
-                await runNodeFallback();
-            } catch (nodeErr) {
-                return res.status(500).json({ success: false, message: 'DOCX bygning fejlede', error: `python: ${String(pyErr && pyErr.message || pyErr)}; node: ${String(nodeErr && nodeErr.message || nodeErr)}` });
-            }
-        }
-        res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-        res.setHeader('Content-Disposition', `attachment; filename="${path.basename(outPath)}"`);
-        return fs.createReadStream(outPath).pipe(res);
     } catch (e) {
         res.status(500).json({ success: false, message: 'Fejl ved DOCX bygning', error: e.message });
     }
@@ -4077,19 +4121,34 @@ app.post('/api/build-docx', express.json({ limit: '5mb' }), async (req, res) => 
 // Test endpoint: build DOCX from bundled scriptskabelon/testOutputLLM.md
 app.get('/api/test-docx', async (req, res) => {
     try {
-        const samplePath = path.join(__dirname, 'templates', 'testOutputLLM.md');
+        // Prefer scriptskabelon test if present; fallback to templates
+        const sampleCandidates = [
+            path.join(__dirname, 'scriptskabelon', 'testOutputLLM.md'),
+            path.join(__dirname, 'templates', 'testOutputLLM.md')
+        ];
+        const samplePath = sampleCandidates.find(p => { try { return fs.existsSync(p); } catch { return false; } }) || sampleCandidates[sampleCandidates.length - 1];
         if (!fs.existsSync(samplePath)) {
             return res.status(404).json({ success: false, message: 'Prøvedata ikke fundet' });
         }
         const markdown = fs.readFileSync(samplePath, 'utf8');
+        // Ensure python deps
+        try { await ensurePythonDeps(); } catch {}
         const tmpDir = ensureTmpDir();
         const outPath = path.join(tmpDir, `test_${Date.now()}.docx`);
 
         const python = process.env.PYTHON_BIN || 'python3';
-        // Use the Colab-aligned builder for test route as well
         const scriptPath = path.join(__dirname, 'scripts', 'build_docx.py');
-        const templateDocxPath = TEMPLATE_DOCX;
-        const templateBlockPath = path.join(__dirname, 'templates', 'blok.md');
+        const blockCandidates = [
+            path.join(__dirname, 'scriptskabelon', 'blok.md'),
+            path.join(__dirname, 'templates', 'blok.md')
+        ];
+        const templateCandidates = [
+            TEMPLATE_DOCX,
+            path.join(__dirname, 'scriptskabelon', 'Bilag 6 Svar på henvendelser i høringsperioden.docx'),
+            path.join(__dirname, 'templates', 'Bilag 6 Svar på henvendelser i høringsperioden.docx')
+        ];
+        const templateBlockPath = blockCandidates.find(p => { try { return fs.existsSync(p); } catch { return false; } }) || blockCandidates[blockCandidates.length - 1];
+        const templateDocxPath = templateCandidates.find(p => { try { return fs.existsSync(p); } catch { return false; } }) || TEMPLATE_DOCX;
         const args = [
             scriptPath,
             '--markdown', '-',
@@ -4097,7 +4156,8 @@ app.get('/api/test-docx', async (req, res) => {
             '--template', templateDocxPath,
             '--template-block', templateBlockPath
         ];
-        const child = spawn(python, args, { stdio: ['pipe', 'pipe', 'pipe'] });
+        const env = { ...process.env, PYTHONPATH: process.env.PYTHONPATH || path.join(__dirname, 'python_packages') };
+        const child = spawn(python, args, { stdio: ['pipe', 'pipe', 'pipe'], env });
         let stderr = '';
         child.stdin.write(markdown);
         child.stdin.end();

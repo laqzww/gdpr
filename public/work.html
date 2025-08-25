@@ -1989,7 +1989,7 @@
             const testParam = usp.get('test');
             const demoPart = demoParam ? `&demo=${encodeURIComponent(demoParam)}` : '';
             // Force direct streaming by default to avoid spawning extra background jobs in fallback
-            const bgPart = (bgParam !== null) ? `&bg=${encodeURIComponent(bgParam)}` : '&bg=0';
+            const bgPart = (bgParam !== null) ? `&bg=${encodeURIComponent(bgParam)}` : '&bg=1';
             const testPart = testParam ? `&test=${encodeURIComponent(testParam)}` : '';
             const url = `/api/summarize/${hearingId}?n=3&nocache=1&t=${Date.now()}${demoPart}${bgPart}${testPart}`;
             const progressEl = document.getElementById('genProgress2');
