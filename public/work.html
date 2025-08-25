@@ -1119,7 +1119,10 @@
                     if (!m) continue;
                     if (m.type === 'description' && typeof m.content === 'string' && m.content.trim().length > 0) return true;
                     if (m.type === 'file' && typeof m.url === 'string' && m.url.trim().length > 0) return true;
+                    // Accept path-only materials as valid too
+                    if (m.type === 'file' && typeof m.path === 'string' && m.path.trim().length > 0) return true;
                     if (typeof m.url === 'string' && m.url.trim().length > 0) return true;
+                    if (typeof m.path === 'string' && m.path.trim().length > 0) return true;
                 }
                 return false;
             } catch { return false; }
@@ -1215,9 +1218,9 @@
                     } catch (_) {}
                     await new Promise(res => setTimeout(res, pollMs));
                 }
-                // Poll materials DB-only (optional)
+                // Poll materials DB-only (optional, but we want to ensure they arrive)
                 const matStart = Date.now();
-                while (Date.now() - matStart < Math.max(20000, maxMs / 2)) {
+                while (Date.now() - matStart < Math.max(40000, maxMs)) {
                     try {
                         // prefer disk-persisted snapshot for materials
                         let j2 = null;
@@ -1236,6 +1239,17 @@
                     } catch (_) {}
                     await new Promise(res => setTimeout(res, pollMs));
                 }
+                // Final aggressive fallback for materials: direct nocache fetch even if above loop did not succeed
+                try {
+                    if (!isAcceptableMaterials(lastFetched.materials)) {
+                        const t3 = Date.now();
+                        const r3 = await fetchWithTimeout(`/api/hearing/${encodeURIComponent(hearingId)}/materials?nocache=1&t=${t3}`, { cache: 'no-cache', headers: { 'Cache-Control': 'no-cache' } }, 12000);
+                        const j3 = await r3.json().catch(() => ({}));
+                        if (j3 && j3.success && isAcceptableMaterials(j3.materials)) {
+                            try { await acceptAndPersistMaterials(hearingId, j3.materials); } catch {}
+                        }
+                    }
+                } catch {}
                 if (!gotAggregate) {
                     // Final fallback: direct aggregate fetch with nocache to bypass SW
                     try {
@@ -1306,6 +1320,8 @@
             // Show wizard navigation
             document.getElementById('wizardNav').style.display = 'block';
             document.getElementById('actionBar').style.display = 'flex';
+            // Ensure correct step visibility after header renders
+            try { updateStepUi(); } catch {}
         }
 
         function displayResponses(responses) {
@@ -1359,8 +1375,9 @@
             }
             
             document.getElementById('tableContainer').style.display = 'block';
-            document.getElementById('step-1').style.display = 'block';
             updateSelectionInfo();
+            // Keep wizard step visibility consistent
+            try { updateStepUi(); } catch {}
         }
 
         async function displayMaterials(materials) {
@@ -1404,8 +1421,8 @@
                                 Læs tekst
                             </button>
                         ` : ''}
-                        ${material.url ? `
-                            <a href="${toDirectBlivhortFileUrl(material.url, material.title)}" target="_blank" class="btn btn-sm btn-secondary mt-md" onclick="event.stopPropagation()">
+                        ${(material.url || material.path) ? `
+                            <a href="${toDirectBlivhortFileUrl(material.url || material.path, material.title)}" target="_blank" class="btn btn-sm btn-secondary mt-md" onclick="event.stopPropagation()">
                                 <svg class="icon icon-sm">
                                     <use href="/icons.svg#icon-link"></use>
                                 </svg>
@@ -1419,6 +1436,8 @@
             
             materialsContainer.style.display = 'block';
             updateSelectionInfo();
+            // Keep wizard step visibility consistent
+            try { updateStepUi(); } catch {}
         }
         
         function toggleMaterialCard(idx) {
@@ -1509,7 +1528,8 @@
         function updateStepUi() {
             const steps = [1, 2, 3];
             steps.forEach(s => {
-                document.getElementById(`step-${s}`).style.display = (s === currentStep) ? 'block' : 'none';
+                const el = document.getElementById(`step-${s}`);
+                if (el) el.style.display = (s === currentStep) ? 'block' : 'none';
                 const stepBtn = document.getElementById(`wizardStep${s}`);
                 if (stepBtn) {
                     stepBtn.classList.toggle('active', s === currentStep);
@@ -1528,14 +1548,20 @@
             
             // Update generate button state
             const genBtn = document.getElementById('genBtn');
-            if (genBtn && currentStep === 3) {
-                genBtn.disabled = false;
-            }
+            if (genBtn) genBtn.disabled = (currentStep !== 3);
         }
         
         function goToStep(step) { 
             currentStep = Math.max(1, Math.min(3, step)); 
             updateStepUi(); 
+            // Guard: ensure only one step is visible even if called rapidly
+            try {
+                const steps = [1,2,3];
+                for (const s of steps) {
+                    const el = document.getElementById(`step-${s}`);
+                    if (el) el.style.display = (s === currentStep) ? 'block' : 'none';
+                }
+            } catch {}
         }
         
         function nextStep() { 
@@ -1659,6 +1685,14 @@
                     const fn = filename ? `&filename=${encodeURIComponent(filename)}` : '';
                     return `${BH_BASE}/api/file?path=${encodeURIComponent(path)}${fn}`;
                 }
+                // If it's a bare path without protocol that looks like a file path, route via BH
+                try {
+                    if (!/^https?:\/\//i.test(u) && /\//.test(u)) {
+                        const path = u.startsWith('/') ? u : `/${u}`;
+                        const fn = filename ? `&filename=${encodeURIComponent(filename)}` : '';
+                        return `${BH_BASE}/api/file?path=${encodeURIComponent(path)}${fn}`;
+                    }
+                } catch {}
                 return u;
             } catch { return u; }
         }
@@ -1835,9 +1869,9 @@
                 for (let idx = 0; idx < (lastFetched.materials||[]).length; idx++) {
                     const m = lastFetched.materials[idx];
                     if (!flags[idx]) continue;
-                    if (m && m.url) {
+                    if (m && (m.url || m.path)) {
                         // Prefer direct Bliv hørt link for reliability when opening externally
-                        materials.push({ kind: 'link', title: m.title || 'Dokument', url: toDirectBlivhortFileUrl(m.url, m.title) });
+                        materials.push({ kind: 'link', title: m.title || 'Dokument', url: toDirectBlivhortFileUrl(m.url || m.path, m.title) });
                         continue;
                     }
                     if (m && m.type === 'description' && m.content) {
@@ -1862,6 +1896,8 @@
                 showError('Du kan først generere, når trin 1 og 2 er godkendt.');
                 return;
             }
+            // Always enforce step 3 UI to avoid cross-step bleed
+            try { currentStep = 3; updateStepUi(); } catch {}
             
             // Hide progress UI entirely to keep variants up front
             document.getElementById('genProgress').style.display = 'none';
@@ -1877,6 +1913,8 @@
             document.getElementById('summariesContent').innerHTML = ''; // Clear previous
             lastSummaries = [];
             sseRetryAttempted = false;
+            // Reset salvage buffers
+            try { window.__variantDrafts = Object.create(null); } catch {}
 
             // Immediately render placeholders for all variants so the user sees progress
             try {
@@ -1959,6 +1997,25 @@
             let controller = new AbortController();
             window.__genAbortController = controller;
             let gotAnyVariant = false;
+            function salvageFromDrafts() {
+                try {
+                    const expected = Number((bodyData && bodyData.n) ? bodyData.n : 3);
+                    const existing = new Set((lastSummaries || []).map(v => Number(v.id)));
+                    for (let i = 1; i <= expected; i++) {
+                        if (!existing.has(i)) {
+                            const d = (window.__variantDrafts || {})[i];
+                            if (d && (d.summary || (Array.isArray(d.headings) && d.headings.length))) {
+                                const variantObj = { id: i, markdown: '', summary: d.summary || '', headings: d.headings || [] };
+                                lastSummaries.push(variantObj);
+                            }
+                        }
+                    }
+                    if (lastSummaries.length) {
+                        renderSummaryVariants(lastSummaries);
+                        try { document.getElementById('downloadBtn').style.display = 'inline-flex'; } catch {}
+                    }
+                } catch {}
+            }
             function markActivity() {
                 gotAnyVariant = true;
                 if (fallbackTimer) { try { clearTimeout(fallbackTimer); } catch {} fallbackTimer = null; }
@@ -2112,10 +2169,25 @@
                             try { obj = JSON.parse(dataStr || '{}'); } catch (_) {}
                             if (obj && obj.id) {
                                 markActivity();
-                                updateVariantSummary(obj.id, obj.text || '');
+                                // store for salvage; defer rendering to final 'variant'
+                                try {
+                                    window.__variantDrafts = window.__variantDrafts || {};
+                                    window.__variantDrafts[obj.id] = window.__variantDrafts[obj.id] || {};
+                                    if (typeof obj.text === 'string' && obj.text.trim()) {
+                                        window.__variantDrafts[obj.id].summary = obj.text;
+                                    }
+                                } catch {}
                             }
                         } else if (eventName === 'headings') {
-                            // Ignore live headings to avoid flicker; render from final markdown on 'variant'
+                            // Record for salvage; avoid flicker
+                            try {
+                                const obj = JSON.parse(dataStr || '{}');
+                                if (obj && Number.isFinite(obj.id) && Array.isArray(obj.headings)) {
+                                    window.__variantDrafts = window.__variantDrafts || {};
+                                    window.__variantDrafts[obj.id] = window.__variantDrafts[obj.id] || {};
+                                    window.__variantDrafts[obj.id].headings = obj.headings;
+                                }
+                            } catch {}
                         } else if (eventName === 'content') {
                             // Ignore live content to avoid flicker; just mark activity to keep connection alive
                             markActivity();
@@ -2205,6 +2277,8 @@
                             showSuccess('Færdig! Vælg den bedste opsummering og download som DOCX.');
                             try { document.getElementById('genProgress').style.display = 'none'; } catch {}
                             if (fallbackTimer) { clearTimeout(fallbackTimer); fallbackTimer = null; }
+                            // If any variants missing, salvage from drafts
+                            salvageFromDrafts();
                         }
                     }
                 }
@@ -2214,6 +2288,8 @@
                     if (done) break;
                     handleSseChunk(decoder.decode(value, { stream: true }));
                 }
+                // Stream ended without explicit end; salvage any drafts
+                try { salvageFromDrafts(); } catch {}
                 document.getElementById('genBtn').disabled = false;
             } catch (_) {
                 showError('Kunne ikke forbinde til opsummerings-tjenesten.');
@@ -2311,10 +2387,28 @@
                     try { const obj = JSON.parse(ev.data||'{}'); if (obj && obj.id) ensureVariantPlaceholder(obj.id); } catch {}
                 });
                 es.addEventListener('summary', ev => {
-                    // Ignore live summary to avoid flicker; render from final markdown on 'variant'
+                    // Record live summary for salvage, avoid rendering to prevent flicker
+                    try {
+                        const obj = JSON.parse(ev.data||'{}');
+                        if (obj && Number.isFinite(obj.id)) {
+                            window.__variantDrafts = window.__variantDrafts || {};
+                            window.__variantDrafts[obj.id] = window.__variantDrafts[obj.id] || {};
+                            if (typeof obj.text === 'string' && obj.text.trim()) {
+                                window.__variantDrafts[obj.id].summary = obj.text;
+                            }
+                        }
+                    } catch {}
                 });
                 es.addEventListener('headings', ev => {
-                    // Ignore live headings to avoid flicker; render from final markdown on 'variant'
+                    // Record live headings for salvage, avoid rendering to prevent flicker
+                    try {
+                        const obj = JSON.parse(ev.data||'{}');
+                        if (obj && Number.isFinite(obj.id) && Array.isArray(obj.headings)) {
+                            window.__variantDrafts = window.__variantDrafts || {};
+                            window.__variantDrafts[obj.id] = window.__variantDrafts[obj.id] || {};
+                            window.__variantDrafts[obj.id].headings = obj.headings;
+                        }
+                    } catch {}
                 });
                 es.addEventListener('variant', ev => {
                     try {
@@ -2400,6 +2494,24 @@
                 es.addEventListener('error', ev => {
                     try { const obj = JSON.parse(ev.data||'{}'); showError((obj && obj.message) || 'Fejl under generering.'); } catch { showError('Fejl under generering.'); }
                     try { clearTimeout(getSseRescue); } catch {}
+                    // Try to salvage partial drafts on error
+                    try {
+                        const expected = 3;
+                        const existing = new Set((lastSummaries || []).map(v => Number(v.id)));
+                        for (let i = 1; i <= expected; i++) {
+                            if (!existing.has(i)) {
+                                const d = (window.__variantDrafts || {})[i];
+                                if (d && (d.summary || (Array.isArray(d.headings) && d.headings.length))) {
+                                    const variantObj = { id: i, markdown: '', summary: d.summary || '', headings: d.headings || [] };
+                                    lastSummaries.push(variantObj);
+                                }
+                            }
+                        }
+                        if (lastSummaries.length) {
+                            renderSummaryVariants(lastSummaries);
+                            try { document.getElementById('downloadBtn').style.display = 'inline-flex'; } catch {}
+                        }
+                    } catch {}
                 });
                 es.addEventListener('end', () => {
                     showSuccess('Færdig! Vælg den bedste opsummering og download som DOCX.');
@@ -2410,6 +2522,24 @@
                     try { es.close(); } catch {}
                     try { if (window.__genEventSource === es) window.__genEventSource = null; } catch {}
                     try { clearTimeout(getSseRescue); } catch {}
+                    // Final salvage of missing variants
+                    try {
+                        const expected = 3;
+                        const existing = new Set((lastSummaries || []).map(v => Number(v.id)));
+                        for (let i = 1; i <= expected; i++) {
+                            if (!existing.has(i)) {
+                                const d = (window.__variantDrafts || {})[i];
+                                if (d && (d.summary || (Array.isArray(d.headings) && d.headings.length))) {
+                                    const variantObj = { id: i, markdown: '', summary: d.summary || '', headings: d.headings || [] };
+                                    lastSummaries.push(variantObj);
+                                }
+                            }
+                        }
+                        if (lastSummaries.length) {
+                            renderSummaryVariants(lastSummaries);
+                            try { document.getElementById('downloadBtn').style.display = 'inline-flex'; } catch {}
+                        }
+                    } catch {}
                 });
             } catch (_) {
                 showError('Kunne ikke oprette forbindelse (fallback).');
@@ -2524,6 +2654,21 @@
                             }
                         } catch {}
                     }
+                    // If still missing, salvage from drafts collected during job updates
+                    try {
+                        const expected = expectedCount;
+                        const existing = new Set((lastSummaries || []).map(v => Number(v.id)));
+                        for (let i = 1; i <= expected; i++) {
+                            if (!existing.has(i)) {
+                                const d = (window.__variantDrafts || {})[i];
+                                if (d && (d.summary || (Array.isArray(d.headings) && d.headings.length))) {
+                                    const variantObj = { id: i, markdown: '', summary: d.summary || '', headings: d.headings || [] };
+                                    lastSummaries.push(variantObj);
+                                    renderSummaryVariants(lastSummaries);
+                                }
+                            }
+                        }
+                    } catch {}
                 } catch {}
             }, rescueAfterMs);
 
@@ -2583,6 +2728,20 @@
                                 }
                             } catch {}
                         }
+                        // Salvage from drafts if still missing
+                        try {
+                            const existing = new Set((lastSummaries || []).map(v => Number(v.id)));
+                            for (let i = 1; i <= expected; i++) {
+                                if (!existing.has(i)) {
+                                    const d = (window.__variantDrafts || {})[i];
+                                    if (d && (d.summary || (Array.isArray(d.headings) && d.headings.length))) {
+                                        const variantObj = { id: i, markdown: '', summary: d.summary || '', headings: d.headings || [] };
+                                        lastSummaries.push(variantObj);
+                                        renderSummaryVariants(lastSummaries);
+                                    }
+                                }
+                            }
+                        } catch {}
                     } catch {}
                     showSuccess('Færdig! Vælg den bedste opsummering og download som DOCX.');
                     try { document.getElementById('genBtn').disabled = false; } catch {}
