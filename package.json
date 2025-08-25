@@ -23,7 +23,7 @@
         "@aws-sdk/s3-request-presigner": "^3.58.0",
         "archiver": "^5.3.1",
         "axios": "^0.21.4",
-        "better-sqlite3": "^8.7.0",
+        "better-sqlite3": "^9.4.3",
         "cheerio": "^1.0.0-rc.12",
         "connect-sqlite3": "^0.9.16",
         "cors": "^2.8.5",
