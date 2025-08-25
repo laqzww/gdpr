@@ -253,7 +253,15 @@ function ensurePythonDeps() {
                     const reqPath = path.join(__dirname, 'requirements.txt');
                     const target = path.join(__dirname, 'python_packages');
                     try { fs.mkdirSync(target, { recursive: true }); } catch {}
-                    const args = ['-m', 'pip', 'install', '--no-cache-dir', '--no-warn-script-location', '--prefer-binary', '--only-binary', ':all:', '--target', target, '-r', reqPath];
+                    // Remove possibly ABI-mismatched installs from build stage
+                    try {
+                        const rmIfExists = (p) => { try { if (fs.existsSync(p)) fs.rmSync(p, { recursive: true, force: true }); } catch (_) {} };
+                        rmIfExists(path.join(target, 'lxml'));
+                        for (const name of fs.readdirSync(target)) {
+                            if (/^lxml-.*\.dist-info$/i.test(name)) rmIfExists(path.join(target, name));
+                        }
+                    } catch (_) {}
+                    const args = ['-m', 'pip', 'install', '--no-cache-dir', '--no-warn-script-location', '--upgrade', '--force-reinstall', '--prefer-binary', '--only-binary', ':all:', '--target', target, '-r', reqPath];
                     const pip = spawn(python, args, { stdio: ['ignore','pipe','pipe'], env });
                     let pipErr = '';
                     pip.stderr.on('data', d => { pipErr += d.toString(); });
@@ -4200,6 +4208,39 @@ app.get('/api/test-docx', async (req, res) => {
         });
     } catch (e) {
         res.status(500).json({ success: false, message: 'Fejl ved test-DOCX', error: e.message });
+    }
+});
+
+// Latest variants for a hearing (from the most recent job), for robust client fallback
+app.get('/api/hearing/:id/variants/latest', (req, res) => {
+    try {
+        if (!sqliteDb || !sqliteDb.prepare) {
+            return res.status(503).json({ success: false, message: 'Database unavailable' });
+        }
+        const hid = String(req.params.id).trim();
+        const row = sqliteDb.prepare(`SELECT job_id FROM jobs WHERE hearing_id = ? ORDER BY updated_at DESC LIMIT 1`).get(Number(hid));
+        if (!row || !row.job_id) {
+            return res.json({ success: true, variants: [] });
+        }
+        const rows = sqliteDb.prepare(`SELECT variant as id, markdown, summary, headings_json as headingsJson FROM job_variants WHERE job_id=? ORDER BY variant ASC`).all(row.job_id);
+        const variants = rows.map(r => ({ id: r.id, markdown: r.markdown || '', summary: r.summary || '', headings: r.headingsJson ? JSON.parse(r.headingsJson) : [] }))
+            .filter(v => (v.markdown && v.markdown.trim().length) || (v.summary && v.summary.trim().length));
+        return res.json({ success: true, variants });
+    } catch (e) {
+        return res.status(500).json({ success: false, message: e.message });
+    }
+});
+
+// Recent in-memory variants (best-effort) for very fresh results even if DB not yet updated
+app.get('/api/hearing/:id/variants/recent', (req, res) => {
+    try {
+        const hid = String(req.params.id || '').trim();
+        if (!hid || !recentVariantsByHearing.has(hid)) return res.json({ success: true, variants: [] });
+        const m = recentVariantsByHearing.get(hid);
+        const out = Array.from(m.values()).sort((a,b) => Number(a.id) - Number(b.id));
+        return res.json({ success: true, variants: out });
+    } catch (e) {
+        return res.status(500).json({ success: false, message: e.message });
     }
 });
 

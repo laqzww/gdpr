@@ -2830,6 +2830,48 @@
             
             container.style.display = 'block';
             document.getElementById('downloadBtn').style.display = 'inline-flex';
+            // Kick off a short fallback poller in case some variants are still not in the UI
+            try {
+                if (!window.__variantsRescueStarted) {
+                    window.__variantsRescueStarted = true;
+                    const hearingId = lastFetched && lastFetched.hearing && lastFetched.hearing.id;
+                    let attempts = 0;
+                    const timer = setInterval(async () => {
+                        try {
+                            attempts += 1;
+                            if (!hearingId || attempts > 6) { clearInterval(timer); return; }
+                            // Prefer DB-backed latest variants
+                            let got = false;
+                            try {
+                                const r1 = await fetch(`/api/hearing/${encodeURIComponent(hearingId)}/variants/latest?t=${Date.now()}`, { cache: 'no-store' });
+                                const j1 = await r1.json();
+                                if (j1 && j1.success && Array.isArray(j1.variants) && j1.variants.length) {
+                                    const have = new Set((lastSummaries || []).map(v => String(v.id)));
+                                    for (const v of j1.variants) {
+                                        if (!have.has(String(v.id))) lastSummaries.push(v);
+                                    }
+                                    renderSummaryVariants(lastSummaries);
+                                    got = true;
+                                }
+                            } catch {}
+                            if (!got) {
+                                // Try in-memory recent variants
+                                try {
+                                    const r2 = await fetch(`/api/hearing/${encodeURIComponent(hearingId)}/variants/recent?t=${Date.now()}`, { cache: 'no-store' });
+                                    const j2 = await r2.json();
+                                    if (j2 && j2.success && Array.isArray(j2.variants) && j2.variants.length) {
+                                        const have = new Set((lastSummaries || []).map(v => String(v.id)));
+                                        for (const v of j2.variants) {
+                                            if (!have.has(String(v.id))) lastSummaries.push(v);
+                                        }
+                                        renderSummaryVariants(lastSummaries);
+                                    }
+                                } catch {}
+                            }
+                        } catch {}
+                    }, 2000);
+                }
+            } catch {}
         }
         
         function selectSummaryVariant(id) {
