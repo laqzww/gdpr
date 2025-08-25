@@ -1642,6 +1642,7 @@
                 min-width: 300px;
                 margin-bottom: var(--space-sm);
                 animation: slideIn 0.3s ease-out;
+                cursor: pointer;
             `;
             const iconName = type === 'error' ? 'icon-warning' : type === 'success' ? 'icon-check' : 'icon-info';
             const closeBtn = document.createElement('button');
@@ -1657,13 +1658,28 @@
             notification.appendChild(icon);
             notification.appendChild(textSpan);
             notification.appendChild(closeBtn);
+            // Click anywhere to dismiss
+            notification.addEventListener('click', (e) => {
+                try {
+                    if (e && e.target && (e.target.closest && e.target.closest('button'))) {
+                        // button handler already removes
+                        return;
+                    }
+                } catch {}
+                try {
+                    notification.style.animation = 'slideOut 0.2s ease-in';
+                    setTimeout(() => notification.remove(), 200);
+                } catch {}
+            });
             document.getElementById('notifications').appendChild(notification);
             // Errors are sticky (no auto-dismiss) to ensure users see them
             if (type !== 'error') {
                 setTimeout(() => {
-                    notification.style.animation = 'slideOut 0.3s ease-in';
-                    setTimeout(() => notification.remove(), 300);
-                }, 4000);
+                    try {
+                        notification.style.animation = 'slideOut 0.3s ease-in';
+                        setTimeout(() => notification.remove(), 300);
+                    } catch {}
+                }, 5 * 60 * 1000);
             }
         }
         
@@ -1812,7 +1828,7 @@
 
                 // Hvis data ikke er persisteret på serveren endnu, varm og prøv igen automatisk
                 if ((status === 202) || (data && data.queued)) {
-                    showNotification('Forbereder data – prøver igen…', 'info');
+                    // Silent retry: avoid confusing notification when data is already visible
                     try { await warmAndPoll(hearingId, { showOverlay: false, maxMs: 30000, pollMs: 1500 }); } catch {}
                     ({ status, data } = await runOnce());
                 }

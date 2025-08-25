@@ -469,6 +469,7 @@
                 min-width: 300px;
                 margin-bottom: var(--space-sm);
                 animation: slideIn 0.3s ease-out;
+                cursor: pointer;
             `;
             
             const iconName = type === 'error' ? 'icon-warning' : type === 'success' ? 'icon-check' : 'icon-info';
@@ -479,12 +480,25 @@
                 <span>${message}</span>
             `;
             
+            // Click to dismiss
+            notification.addEventListener('click', () => {
+                try {
+                    notification.style.animation = 'slideOut 0.2s ease-in';
+                    setTimeout(() => notification.remove(), 200);
+                } catch {}
+            });
+            
             document.getElementById('notifications').appendChild(notification);
             
-            setTimeout(() => {
-                notification.style.animation = 'slideOut 0.3s ease-in';
-                setTimeout(() => notification.remove(), 300);
-            }, 4000);
+            // Auto-dismiss after 5 minutes for non-error notifications; errors remain until clicked
+            if (type !== 'error') {
+                setTimeout(() => {
+                    try {
+                        notification.style.animation = 'slideOut 0.3s ease-in';
+                        setTimeout(() => notification.remove(), 300);
+                    } catch {}
+                }, 5 * 60 * 1000);
+            }
         }
         
         async function fetchHearingDataById(hearingId) {
