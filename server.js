@@ -24,8 +24,8 @@ try { OpenAILib = require('openai'); } catch (_) { OpenAILib = null; }
 const multer = require('multer');
 const session = require('express-session');
 let SQLiteStore;
-try { SQLiteStore = require('connect-better-sqlite3')(session); }
-catch (_) { try { SQLiteStore = require('connect-sqlite3')(session); } catch (_) { SQLiteStore = null; } }
+try { SQLiteStore = require('connect-sqlite3')(session); }
+catch (_) { SQLiteStore = null; }
 const cron = require('node-cron');
 const { init: initDb, db: sqliteDb, upsertHearing, replaceResponses, replaceMaterials, readAggregate, getSessionEdits, upsertSessionEdit, setMaterialFlag, getMaterialFlags, addUpload, listUploads } = require('./db/sqlite');
 
