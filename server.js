@@ -241,8 +241,10 @@ function ensurePythonDeps() {
     if (pythonDepsReadyPromise) return pythonDepsReadyPromise;
     pythonDepsReadyPromise = new Promise((resolve) => {
         const python = process.env.PYTHON_BIN || 'python3';
-        const env = { ...process.env, PYTHONPATH: process.env.PYTHONPATH || path.join(__dirname, 'python_packages') };
-        const testCmd = [ '-c', 'import sys; sys.path.insert(0, "' + path.join(__dirname, 'python_packages').replace(/"/g, '\\"') + '"); import docx; from lxml import etree; print("ok")' ];
+        const localPy = path.join(__dirname, 'python_packages');
+        const mergedPyPath = [localPy, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter);
+        const env = { ...process.env, PYTHONPATH: mergedPyPath };
+        const testCmd = [ '-c', 'import sys; sys.path.insert(0, "' + localPy.replace(/"/g, '\\"') + '"); import docx; from lxml import etree; print("ok")' ];
         try {
             const test = spawn(python, testCmd, { stdio: ['ignore','pipe','pipe'], env });
             let out = '';
@@ -4131,7 +4133,9 @@ app.post('/api/build-docx', express.json({ limit: '5mb' }), async (req, res) => 
             '--template', templateDocxPath,
             '--template-block', templateBlockPath
         ];
-        const env = { ...process.env, PYTHONPATH: process.env.PYTHONPATH || path.join(__dirname, 'python_packages') };
+        const localPy = path.join(__dirname, 'python_packages');
+        const mergedPyPath = [localPy, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter);
+        const env = { ...process.env, PYTHONPATH: mergedPyPath };
         const child = spawn(python, args, { stdio: ['pipe', 'pipe', 'pipe'], env });
         let stdout = '';
         let stderr = '';
@@ -4191,7 +4195,9 @@ app.get('/api/test-docx', async (req, res) => {
             '--template', templateDocxPath,
             '--template-block', templateBlockPath
         ];
-        const env = { ...process.env, PYTHONPATH: process.env.PYTHONPATH || path.join(__dirname, 'python_packages') };
+        const localPy2 = path.join(__dirname, 'python_packages');
+        const mergedPyPath2 = [localPy2, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter);
+        const env = { ...process.env, PYTHONPATH: mergedPyPath2 };
         const child = spawn(python, args, { stdio: ['pipe', 'pipe', 'pipe'], env });
         let stderr = '';
         child.stdin.write(markdown);

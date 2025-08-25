@@ -40,7 +40,7 @@ services:
       - key: PIP_USER
         value: "0"
       - key: PYTHONPATH
-        value: "/opt/render/project/src/python_packages"
+        value: "/opt/render/project/src/fetcher/python_packages:/opt/render/project/src/python_packages"
       - key: PIP_ONLY_BINARY
         value: ":all:"
       - key: PIP_PREFER_BINARY
