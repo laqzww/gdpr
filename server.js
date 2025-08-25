@@ -227,7 +227,7 @@ function ensurePythonDeps() {
                     const reqPath = path.join(__dirname, 'requirements.txt');
                     const target = path.join(__dirname, 'python_packages');
                     try { fs.mkdirSync(target, { recursive: true }); } catch {}
-                    const args = ['-m', 'pip', 'install', '--no-cache-dir', '--no-warn-script-location', '--target', target, '-r', reqPath];
+                    const args = ['-m', 'pip', 'install', '--no-cache-dir', '--no-warn-script-location', '--prefer-binary', '--only-binary', ':all:', '--target', target, '-r', reqPath];
                     const pip = spawn(python, args, { stdio: ['ignore','pipe','pipe'], env });
                     let pipErr = '';
                     pip.stderr.on('data', d => { pipErr += d.toString(); });

@@ -13,7 +13,7 @@ services:
       # Disable source builds on Render since distutils may be missing; prefer prebuilt
       :
       if [ -f requirements.txt ]; then \
-        python3 -m pip install --no-cache-dir --no-warn-script-location --target python_packages -r requirements.txt; \
+        python3 -m pip install --no-cache-dir --no-warn-script-location --prefer-binary --only-binary=:all: --target python_packages -r requirements.txt; \
       else \
         echo 'No Python requirements.txt found, skipping'; \
       fi
@@ -41,6 +41,10 @@ services:
         value: "0"
       - key: PYTHONPATH
         value: "/opt/render/project/src/python_packages"
+      - key: PIP_ONLY_BINARY
+        value: ":all:"
+      - key: PIP_PREFER_BINARY
+        value: "1"
       - key: SETUPTOOLS_USE_DISTUTILS
         value: "local"
       - key: ALLOW_RUNTIME_SQLITE_REBUILD
