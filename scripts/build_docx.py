@@ -36,6 +36,23 @@ try:
                     sys.path.insert(0, p)
     except Exception:
         pass
+    # Also try common project-local python_packages folders
+    try:
+        here = Path(__file__).resolve()
+        candidates = [
+            here.parent.parent / 'python_packages',               # fetcher/python_packages
+            here.parent.parent.parent / 'python_packages'          # repo-root/python_packages (if any)
+        ]
+        for c in candidates:
+            try:
+                if c and c.exists():
+                    p = str(c)
+                    if p not in sys.path:
+                        sys.path.insert(0, p)
+            except Exception:
+                pass
+    except Exception:
+        pass
     import docx as python_docx_module  # python-docx >= 1.2.0 recommended
     from docx import Document
     from docx.oxml import OxmlElement

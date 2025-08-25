@@ -277,8 +277,22 @@ function ensurePythonDeps() {
                         let out2 = '';
                         test2.stdout.on('data', d => { out2 += d.toString(); });
                         test2.on('close', (code2) => {
-                            if (code2 === 0 && /ok/.test(out2)) resolve(true);
-                            else resolve(false);
+                            if (code2 === 0 && /ok/.test(out2)) {
+                                resolve(true);
+                            } else {
+                                // Final fallback: try older lxml compatible on wider Python versions
+                                const fbArgs = ['-m','pip','install','--no-cache-dir','--no-warn-script-location','--upgrade','--prefer-binary','--only-binary',':all:','--target', target, 'python-docx>=1.2.0', 'lxml<5', 'Pillow>=8.4.0'];
+                                const pipFb = spawn(python, fbArgs, { stdio: ['ignore','pipe','pipe'], env });
+                                pipFb.on('close', () => {
+                                    const test3 = spawn(python, testCmd, { stdio: ['ignore','pipe','pipe'], env });
+                                    let out3 = '';
+                                    test3.stdout.on('data', d => { out3 += d.toString(); });
+                                    test3.on('close', (code3) => {
+                                        if (code3 === 0 && /ok/.test(out3)) resolve(true);
+                                        else resolve(false);
+                                    });
+                                });
+                            }
                         });
                     });
                 }
