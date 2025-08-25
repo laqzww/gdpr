@@ -24,7 +24,7 @@
         "archiver": "^5.3.1",
         "axios": "^0.21.4",
         "better-sqlite3": "^9.4.3",
-        "better-sqlite3-session-store": "^2.1.0",
+        "connect-better-sqlite3": "^7.1.2",
         "cheerio": "^1.0.0-rc.12",
         "cors": "^2.8.5",
         "dotenv": "^16.3.1",
