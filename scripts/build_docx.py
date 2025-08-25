@@ -19,12 +19,23 @@ If --markdown is '-' content is read from STDIN (UTF-8).
 """
 
 import argparse
+import os
 import sys
 import re
 import hashlib
 from pathlib import Path
 
 try:
+    # Ensure local package directories from PYTHONPATH are on sys.path (handles colon-separated lists)
+    try:
+        pp = os.environ.get('PYTHONPATH', '')
+        if pp:
+            for p in pp.split(os.pathsep):
+                p = p.strip()
+                if p and p not in sys.path:
+                    sys.path.insert(0, p)
+    except Exception:
+        pass
     import docx as python_docx_module  # python-docx >= 1.2.0 recommended
     from docx import Document
     from docx.oxml import OxmlElement
