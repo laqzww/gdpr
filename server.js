@@ -79,6 +79,32 @@ function parseBoolean(value) {
 const OPENAI_BACKGROUND_DEFAULT = parseBoolean(process.env.OPENAI_BACKGROUND || process.env.BACKGROUND_MODE || process.env['BACKGROUND-MODE'] || 'false');
 const BACKGROUND_MODE = parseBoolean(process.env.BACKGROUND_MODE || 'true');
 
+// In-memory recent variants cache for salvage when clients disconnect from SSE
+const RECENT_CACHE_LIMIT = 50; // total variants across all hearings
+const recentVariantsByHearing = new Map(); // key: hearingId -> Map(variantId -> variant)
+function recordRecentVariant(hearingId, variant) {
+    try {
+        const hid = String(hearingId || '').trim();
+        if (!hid || !variant || !variant.id) return;
+        if (!recentVariantsByHearing.has(hid)) recentVariantsByHearing.set(hid, new Map());
+        const map = recentVariantsByHearing.get(hid);
+        map.set(String(variant.id), {
+            id: variant.id,
+            markdown: variant.markdown || '',
+            summary: variant.summary || '',
+            headings: Array.isArray(variant.headings) ? variant.headings : []
+        });
+        // Prune global size
+        let total = 0;
+        for (const m of recentVariantsByHearing.values()) total += m.size;
+        if (total > RECENT_CACHE_LIMIT) {
+            // Remove oldest hearing entry (arbitrary: first inserted)
+            const firstKey = recentVariantsByHearing.keys().next().value;
+            if (typeof firstKey !== 'undefined') recentVariantsByHearing.delete(firstKey);
+        }
+    } catch {}
+}
+
 // Verbosity and reasoning effort controls (opt-in via env)
 function normalizeVerbosity(input) {
     const v = String(input || '').trim().toLowerCase();
@@ -3202,6 +3228,7 @@ app.get('/api/summarize/:id', async (req, res) => {
                             const headings = (markdown.match(/^#{1,6} .*$/mg) || []).slice(0, 50);
                             const variant = { id: i + 1, headings, markdown, summary: (summaryText || '').trim() };
                             sendEvent('variant', { variant });
+                            recordRecentVariant(hearingId, variant);
                             return;
                         }
                         throw e;
@@ -3325,6 +3352,7 @@ app.get('/api/summarize/:id', async (req, res) => {
                 const headings = (markdown.match(/^#{1,6} .*$/mg) || []).slice(0, 50);
                 const variant = { id: i + 1, headings, markdown, summary: (summaryText || '').trim() };
                 sendEvent('variant', { variant });
+                recordRecentVariant(hearingId, variant);
                 // Send final authoritative headings snapshot, derived from markdown if present
                 const finalHeadings = (headings || []).map(h => h.replace(/^#{1,6}\s*/, ''));
                 if (finalHeadings.length) sendEvent('headings', { id: i + 1, items: finalHeadings.slice(0, 6) });

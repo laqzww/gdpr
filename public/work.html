@@ -1934,9 +1934,13 @@
 
             // Prefer POST SSE with compact body (fast, no SQLite dependency). Fallback to GET SSE if needed.
             const hearingId = lastFetched.hearing.id;
-            try { window.__summaryMode = 'sse'; } catch(_) {}
-            startSummarizeViaFetch(hearingId, { force: true }).catch(() => {
-                startSummarizeViaEventSource(hearingId, { force: true });
+            try { window.__summaryMode = 'jobs'; } catch(_) {}
+            // Prefer background jobs JSON path for maximum robustness; fall back to SSE paths on failure
+            startSummarizeViaJobs(hearingId).catch(() => {
+                try { window.__summaryMode = 'sse'; } catch(_) {}
+                startSummarizeViaFetch(hearingId, { force: true }).catch(() => {
+                    startSummarizeViaEventSource(hearingId, { force: true });
+                });
             });
         }
 
