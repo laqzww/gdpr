@@ -108,7 +108,7 @@
         .wizard-nav {
             background: var(--color-white);
             border-bottom: 1px solid var(--color-gray-200);
-            padding: var(--space-md) var(--space-xl);
+            padding: var(--space-sm) var(--space-xl);
             display: flex;
             justify-content: center;
         }
@@ -124,7 +124,7 @@
             display: flex;
             align-items: center;
             gap: var(--space);
-            padding: var(--space-md) var(--space-md);
+            padding: var(--space-sm) var(--space-xl);
             border-radius: var(--radius-full);
             cursor: pointer;
             transition: all var(--transition-base);
@@ -142,8 +142,8 @@
         }
         
         .wizard-step-number {
-            width: 28px;
-            height: 28px;
+            width: 24px;
+            height: 24px;
             border-radius: var(--radius-full);
             background: var(--color-gray-200);
             display: flex;
@@ -362,6 +362,7 @@
         .action-buttons {
             display: flex;
             gap: var(--space-md);
+            margin-left: auto;
         }
 
         /* Response detail styles */
@@ -485,14 +486,15 @@
             }
             
             .action-section {
-                flex-direction: column;
+                flex-direction: row;
+                align-items: center;
                 gap: var(--space-md);
-                text-align: center;
+                text-align: left;
             }
-            
             .action-buttons {
-                width: 100%;
-                justify-content: center;
+                width: auto;
+                justify-content: flex-end;
+                margin-left: auto;
             }
         }
 
@@ -711,7 +713,7 @@
                 <button class="wizard-step" onclick="goToStep(3)" id="wizardStep3">
                     <span class="wizard-step-number">
                         <svg class="icon icon-sm" id="stepIcon3">
-                            <use href="/icons.svg#icon-ai"></use>
+                            <use href="/icons.svg#icon-magic"></use>
                         </svg>
                     </span>
                     <span class="wizard-step-label">Opsummér</span>
@@ -735,7 +737,7 @@
                 <div class="mt-sm" style="display: flex; gap: var(--space-sm);">
                     <button class="btn btn-secondary" id="autoClassifyBtn" onclick="autoClassifyRespondents()" title="Udfyld automatisk respondentnavn og -type med AI">
                         <svg class="icon">
-                            <use href="/icons.svg#icon-ai"></use>
+                            <use href="/icons.svg#icon-magic"></use>
                         </svg>
                         Udfyld navne/typer (AI)
                     </button>
@@ -808,13 +810,13 @@
             <div class="mb-lg" style="text-align: center;">
                 <h2 class="flex items-center gap-md">
                     <svg class="icon icon-lg" style="color: var(--color-primary);">
-                        <use href="/icons.svg#icon-ai"></use>
+                        <use href="/icons.svg#icon-magic"></use>
                     </svg>
                     Vælg opsummering
                 </h2>
                 <button id="genBtn" class="btn btn-primary btn-lg" onclick="generateSummaries()" style="margin: 80px auto;">
                     <svg class="icon">
-                        <use href="/icons.svg#icon-ai"></use>
+                        <use href="/icons.svg#icon-magic"></use>
                     </svg>
                     Generér opsummeringer
                 </button>
@@ -1765,21 +1767,36 @@
                 const hearingId = getHearingIdFromUrl();
                 if (!hearingId) { showError('Intet hørings-ID'); return; }
                 showNotification('Analyserer høringssvar med AI…', 'info');
-                const resp = await fetch(`/api/auto-classify-respondents/${encodeURIComponent(hearingId)}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({})
-                });
-                let data = null;
-                try { data = await resp.json(); }
-                catch (_) { data = { success: false, message: 'Ugyldigt svar fra serveren' }; }
+
+                async function runOnce() {
+                    const resp = await fetch(`/api/auto-classify-respondents/${encodeURIComponent(hearingId)}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({})
+                    });
+                    let data = null;
+                    try { data = await resp.json(); }
+                    catch (_) { data = { success: false, message: 'Ugyldigt svar fra serveren' }; }
+                    return { status: resp.status, data };
+                }
+
+                // Første forsøg
+                let { status, data } = await runOnce();
+
+                // Hvis data ikke er persisteret på serveren endnu, varm og prøv igen automatisk
+                if ((status === 202) || (data && data.queued)) {
+                    showNotification('Forbereder data – prøver igen…', 'info');
+                    try { await warmAndPoll(hearingId, { showOverlay: false, maxMs: 30000, pollMs: 1500 }); } catch {}
+                    ({ status, data } = await runOnce());
+                }
+
                 if (!data || !data.success) {
                     const msg = (data && (data.message || data.error)) || 'Kunne ikke klassificere automatisk';
                     showError(msg);
                     return;
                 }
                 if (data.queued) {
-                    showNotification('Data for høringen var ikke klar – den er sat i baggrundskø. Prøv igen om lidt.', 'info');
+                    showNotification('Data for høringen var ikke klar. Prøv igen om lidt.', 'info');
                     return;
                 }
                 const suggestions = Array.isArray(data.suggestions) ? data.suggestions : [];
@@ -2798,7 +2815,7 @@
                                    class="summary-radio" onchange="selectSummaryVariant(${v.id})" />
                             <h4 class="flex items-center gap-sm">
                                 <svg class="icon" style="color: var(--color-primary);">
-                                    <use href="/icons.svg#icon-ai"></use>
+                                    <use href="/icons.svg#icon-magic"></use>
                                 </svg>
                                 Variant ${v.id}
                             </h4>
@@ -2892,7 +2909,7 @@
                     <input type="radio" name="summaryChoice" value="${id}" ${id===1?'checked':''} class="summary-radio" onchange="selectSummaryVariant(${id})" />
                     <h4 class="flex items-center gap-sm">
                         <svg class="icon" style="color: var(--color-primary);">
-                            <use href="/icons.svg#icon-ai"></use>
+                            <use href="/icons.svg#icon-magic"></use>
                         </svg>
                         Variant ${id}
                     </h4>

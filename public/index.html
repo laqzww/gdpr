@@ -135,12 +135,16 @@
 
         .suggestion-content {
             flex: 1;
+            min-width: 0;
         }
         
         .suggestion-title {
             font-weight: 600;
             color: var(--color-dark);
             margin-bottom: var(--space-xs);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
         }
         
         .suggestion-meta {
