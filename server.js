@@ -23,7 +23,9 @@ let OpenAILib = null;
 try { OpenAILib = require('openai'); } catch (_) { OpenAILib = null; }
 const multer = require('multer');
 const session = require('express-session');
-const SQLiteStore = require('connect-sqlite3')(session);
+let SQLiteStore;
+try { SQLiteStore = require('better-sqlite3-session-store')(session); }
+catch (_) { try { SQLiteStore = require('connect-sqlite3')(session); } catch (_) { SQLiteStore = null; } }
 const cron = require('node-cron');
 const { init: initDb, db: sqliteDb, upsertHearing, replaceResponses, replaceMaterials, readAggregate, getSessionEdits, upsertSessionEdit, setMaterialFlag, getMaterialFlags, addUpload, listUploads } = require('./db/sqlite');
 
@@ -213,7 +215,9 @@ try { fs.mkdirSync(path.join(__dirname, 'data'), { recursive: true }); } catch {
 // Initialize SQLite and sessions
 try { initDb(); } catch (e) { console.error('SQLite init failed:', e.message); }
 app.use(session({
-    store: new SQLiteStore({ db: (process.env.SESSION_DB || 'sessions.sqlite'), dir: path.join(__dirname, 'data') }),
+    store: SQLiteStore ? (SQLiteStore.length === 1
+        ? new SQLiteStore({ db: (process.env.SESSION_DB || 'sessions.sqlite'), dir: path.join(__dirname, 'data') })
+        : new SQLiteStore({ client: sqliteDb, expired: { clear: true, intervalMs: 15 * 60 * 1000 } })) : undefined,
     secret: process.env.SESSION_SECRET || 'dev-secret',
     resave: false,
     saveUninitialized: true,
