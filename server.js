@@ -789,6 +789,28 @@ async function legacySummarizeAsJobSse(req, res, payload) {
         const statusCache = new Map();
         const pollMs = Math.max(2000, JOB_RECOMMENDED_POLL_MS);
         const start = Date.now();
+
+        async function sendVariantFromDb(variantId) {
+            try {
+                const row = sqliteDb.prepare(`SELECT markdown, summary, headings_json FROM job_variants WHERE job_id=? AND variant=?`).get(jobId, variantId);
+                if (!row) return false;
+                const markdown = row?.markdown || '';
+                const summary = row?.summary || '';
+                const headings = row && row.headings_json ? JSON.parse(row.headings_json) : [];
+                if ((markdown && markdown.trim().length) || (summary && summary.trim().length)) {
+                    sendEvent('variant', { variant: { id: variantId, markdown, summary, headings } });
+                    sent.add(variantId);
+                    return true;
+                }
+                return false;
+            } catch { return false; }
+        }
+
+        async function salvageAllVariants() {
+            for (let i = 1; i <= n; i++) {
+                if (!sent.has(i)) { try { await sendVariantFromDb(i); } catch {} }
+            }
+        }
         while (!res.writableEnded && Date.now() - start < SUMMARIZE_TIMEOUT_MS) {
             const snap = getJobSnapshot(jobId);
             if (!snap) { sendEvent('status', { phase: 'polling', message: 'Afventer job…' }); await new Promise(r => setTimeout(r, pollMs)); continue; }
@@ -801,24 +823,28 @@ async function legacySummarizeAsJobSse(req, res, payload) {
                     statusCache.set(key, { state: v.state, progress: v.progress, phase: v.phase });
                     sendEvent('status', { id: v.id, phase: v.phase || v.state, message: (v.state || '').toString(), progress: v.progress || 0 });
                 }
-                if (v.done && !sent.has(v.id)) {
-                    try {
-                        const row = sqliteDb.prepare(`SELECT markdown, summary, headings_json FROM job_variants WHERE job_id=? AND variant=?`).get(jobId, v.id);
-                        const headings = row && row.headings_json ? JSON.parse(row.headings_json) : [];
-                        sendEvent('variant', { variant: { id: v.id, markdown: row?.markdown || '', summary: row?.summary || '', headings } });
-                        sent.add(v.id);
-                    } catch {}
-                }
+                if (v.done && !sent.has(v.id)) { await sendVariantFromDb(v.id); }
             }
-            if (snap.state === 'completed') { sendEvent('end', { message: 'Færdig' }); break; }
-            if (snap.state === 'failed') { sendEvent('error', { message: 'Job fejlede' }); break; }
-            if (snap.state === 'cancelled') { sendEvent('error', { message: 'Job annulleret' }); break; }
+            if (snap.state === 'completed') {
+                // Ensure any missing but persisted variants are emitted before end
+                try { await salvageAllVariants(); } catch {}
+                sendEvent('end', { message: 'Færdig' });
+                break;
+            }
+            if (snap.state === 'failed' || snap.state === 'cancelled') {
+                // Attempt to emit whatever content exists before signaling failure
+                try { await salvageAllVariants(); } catch {}
+                sendEvent('error', { message: snap.state === 'failed' ? 'Job fejlede' : 'Job annulleret' });
+                // Also send a terminal end so clients stop spinners
+                sendEvent('end', { message: 'Afslutter.' });
+                break;
+            }
             await new Promise(r => setTimeout(r, pollMs));
         }
     } catch (e) {
         sendEvent('error', { message: e?.message || 'Ukendt fejl' });
     } finally {
-        try { res.end(); } catch {}
+        try { if (!res.writableEnded) { try { /* final best-effort salvage */ } catch {}; res.end(); } } catch {}
     }
 }
 
@@ -3335,12 +3361,39 @@ app.post('/api/summarize/:id', express.text({ type: 'application/json', limit: '
             }
         };
         
-        req.on('close', () => {
+        req.on('close', async () => {
             try { clearInterval(keepAliveInterval); } catch (_) {}
-            if (!res.writableEnded) {
-                res.end();
-                logDebug('[summarize] Client disconnected, closing SSE connection.');
-            }
+            // If direct streaming was planned (bg=0), salvage by creating a background job so results persist
+            try {
+                const bgParamClose = String(req.query.bg || '').trim().toLowerCase();
+                const forceDirectClose = bgParamClose === '0' || bgParamClose === 'false' || bgParamClose === 'no';
+                const dbReadyClose = !!(sqliteDb && sqliteDb.prepare);
+                if (forceDirectClose && dbReadyClose) {
+                    try {
+                        const hearingIdClose = String(req.params.id).trim();
+                        const nClose = Number(req.query.n || parsedBody?.n || DEFAULT_VARIANTS);
+                        const payloadClose = {
+                            hearing: parsedBody?.hearing || null,
+                            responses: parsedBody?.responses || null,
+                            materials: parsedBody?.materials || null,
+                            edits: parsedBody?.edits || null,
+                            n: nClose
+                        };
+                        const created = await createJob(req, hearingIdClose, payloadClose);
+                        if (!created?.error && created?.jobId) {
+                            logDebug(`[summarize] Client disconnected; started background job ${created.jobId}`);
+                        }
+                    } catch (e) {
+                        logDebug(`[summarize] Disconnect salvage failed: ${e?.message || e}`);
+                    }
+                }
+            } catch (_) {}
+            try {
+                if (!res.writableEnded) {
+                    res.end();
+                    logDebug('[summarize] Client disconnected, closing SSE connection.');
+                }
+            } catch {}
             resolve(); // Resolve the main promise on client disconnect
         });
 

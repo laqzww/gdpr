@@ -2097,7 +2097,7 @@
                     if (progressEl) progressEl.textContent = `Forbundet til serveren (${dt} ms)…`;
                 }
                 // Fallback if totally stuck: give more room to avoid double streams (25s, 10s in demo)
-                const fallbackTimeoutMs = demoParam ? 8000 : 10000;
+                const fallbackTimeoutMs = demoParam ? 8000 : 20000;
                 fallbackTimer = setTimeout(() => {
                     if (!gotAnyVariant && !sseRetryAttempted) {
                         try { controller.abort(); } catch {}
@@ -2189,8 +2189,18 @@
                                 }
                             } catch {}
                         } else if (eventName === 'content') {
-                            // Ignore live content to avoid flicker; just mark activity to keep connection alive
+                            // Record live content for salvage and mark activity
                             markActivity();
+                            try {
+                                const obj = JSON.parse(dataStr || '{}');
+                                if (obj && Number.isFinite(obj.id)) {
+                                    window.__variantDrafts = window.__variantDrafts || {};
+                                    window.__variantDrafts[obj.id] = window.__variantDrafts[obj.id] || {};
+                                    if (typeof obj.markdown === 'string' && obj.markdown.trim()) {
+                                        window.__variantDrafts[obj.id].markdown = obj.markdown;
+                                    }
+                                }
+                            } catch {}
                         } else if (eventName === 'variant') {
                             let obj = {};
                             try { obj = JSON.parse(dataStr || '{}'); } catch (_) {}
@@ -2243,7 +2253,7 @@
                                 setVariantStatusText(obj.id, obj.message || `Status: ${obj.phase}`);
                                 const phase = String(obj.phase||'').toLowerCase();
                                 // Only treat real progress phases as activity; allow fallback during early phases
-                                const isProgress = ['started','thinking','drafting','done','streaming','using-tools'].includes(phase);
+                                const isProgress = ['started','thinking','drafting','done','streaming','using-tools','preparing','queued','connecting'].includes(phase);
                                 if (isProgress) markActivity();
                             } else {
                                 const progressEl = document.getElementById('genProgress2');
