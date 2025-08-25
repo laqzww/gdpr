@@ -123,7 +123,7 @@
         .wizard-step {
             display: flex;
             align-items: center;
-            gap: calc(var(--space) + 4px);
+            gap: var(--space-lg);
             padding: var(--space-sm) var(--space-xl);
             border-radius: var(--radius-full);
             cursor: pointer;
@@ -1634,21 +1634,28 @@
                 margin-bottom: var(--space-sm);
                 animation: slideIn 0.3s ease-out;
             `;
-            
             const iconName = type === 'error' ? 'icon-warning' : type === 'success' ? 'icon-check' : 'icon-info';
-            notification.innerHTML = `
-                <svg class="icon">
-                    <use href="/icons.svg?v=2#${iconName}"></use>
-                </svg>
-                <span>${message}</span>
-            `;
-            
+            const closeBtn = document.createElement('button');
+            closeBtn.className = 'btn btn-ghost btn-sm';
+            closeBtn.setAttribute('aria-label', 'Luk');
+            closeBtn.innerHTML = `<svg class="icon"><use href="/icons.svg?v=2#icon-close"></use></svg>`;
+            closeBtn.onclick = () => { try { notification.remove(); } catch {} };
+            const textSpan = document.createElement('span');
+            textSpan.textContent = String(message||'');
+            const icon = document.createElement('svg');
+            icon.className = 'icon';
+            icon.innerHTML = `<use href="/icons.svg?v=2#${iconName}"></use>`;
+            notification.appendChild(icon);
+            notification.appendChild(textSpan);
+            notification.appendChild(closeBtn);
             document.getElementById('notifications').appendChild(notification);
-            
-            setTimeout(() => {
-                notification.style.animation = 'slideOut 0.3s ease-in';
-                setTimeout(() => notification.remove(), 300);
-            }, 4000);
+            // Errors are sticky (no auto-dismiss) to ensure users see them
+            if (type !== 'error') {
+                setTimeout(() => {
+                    notification.style.animation = 'slideOut 0.3s ease-in';
+                    setTimeout(() => notification.remove(), 300);
+                }, 4000);
+            }
         }
         
 
@@ -1943,6 +1950,7 @@
             sseRetryAttempted = false;
             // Reset salvage buffers
             try { window.__variantDrafts = Object.create(null); } catch {}
+            try { window.__expectedVariants = 3; } catch {}
 
             // Immediately render placeholders for all variants so the user sees progress
             try {
@@ -1960,6 +1968,9 @@
                 }
             } catch (_) {}
 
+            // Start patient-friendly global ticker
+            try { startGlobalThinkingTicker(); } catch {}
+
             // Prefer POST SSE with compact body (fast, no SQLite dependency). Fallback to GET SSE if needed.
             const hearingId = lastFetched.hearing.id;
             try { window.__summaryMode = 'jobs'; } catch(_) {}
@@ -1972,12 +1983,68 @@
             });
         }
 
+        // Time helpers for patient UX
+        function formatDuration(ms) {
+            try {
+                const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+                const minutes = Math.floor(totalSeconds / 60);
+                const seconds = totalSeconds % 60;
+                return `${minutes}:${String(seconds).padStart(2, '0')}`;
+            } catch { return '0:00'; }
+        }
+
+        function getElapsedLabel() {
+            try {
+                const t0 = window.__genTiming && window.__genTiming.t0 ? window.__genTiming.t0 : performance.now();
+                const elapsed = performance.now() - t0;
+                return `Tænker… ${formatDuration(elapsed)}`;
+            } catch { return 'Tænker…'; }
+        }
+
+        function startGlobalThinkingTicker() {
+            try {
+                if (window.__thinkingTimer) return;
+                // Immediately set a status, then update every second
+                broadcastGlobalStatus(getElapsedLabel());
+                window.__thinkingTimer = setInterval(() => {
+                    broadcastGlobalStatus(getElapsedLabel());
+                }, 1000);
+            } catch {}
+        }
+
+        function stopGlobalThinkingTicker() {
+            try { if (window.__thinkingTimer) { clearInterval(window.__thinkingTimer); window.__thinkingTimer = null; } } catch {}
+        }
+
+        function markVariantDone(id) {
+            try {
+                let card = document.querySelector(`[data-variant-id="${id}"]`);
+                if (!card) { ensureVariantPlaceholder(id); card = document.querySelector(`[data-variant-id="${id}"]`); }
+                if (!card) return;
+                const statusEl = card.querySelector('.summary-status');
+                if (!statusEl) return;
+                const ticker = statusEl.querySelector('.thinking-ticker');
+                if (ticker) ticker.remove();
+                const existingDone = statusEl.querySelector('.text-success');
+                if (!existingDone) {
+                    const doneEl = document.createElement('div');
+                    doneEl.className = 'text-success';
+                    doneEl.textContent = 'Færdig';
+                    statusEl.appendChild(doneEl);
+                }
+                try { card.setAttribute('data-done', 'true'); } catch {}
+                try { dedupeDoneIndicatorsForCard(card); } catch {}
+            } catch {}
+        }
+
         // Helper: set status text for a specific variant, ensuring ticker exists
-        function setVariantStatusText(id, message) {
+        function setVariantStatusText(id, message, opts) {
             if (!id) return;
             let card = document.querySelector(`[data-variant-id="${id}"]`);
             if (!card) { ensureVariantPlaceholder(id); card = document.querySelector(`[data-variant-id="${id}"]`); }
             if (!card) return;
+            // Do not re-add a ticker once marked done
+            try { if (card.getAttribute('data-done') === 'true') return; } catch {}
             const el = card.querySelector('.summary-status');
             if (!el) return;
             let ticker = el.querySelector('.thinking-ticker');
@@ -1993,7 +2060,10 @@
             }
             const textEl = ticker.querySelector('.thinking-text');
             if (textEl && typeof message === 'string') textEl.textContent = message;
-            if (window.__variantHasOwnStatus && typeof id === 'number') window.__variantHasOwnStatus[id] = true;
+            const own = !(opts && opts.own === false);
+            if (window.__variantHasOwnStatus && typeof id === 'number') {
+                window.__variantHasOwnStatus[id] = own ? true : false;
+            }
         }
 
         // Helper: broadcast a global status to all variants that don't have their own yet
@@ -2001,9 +2071,35 @@
             if (!message) return;
             for (let i = 1; i <= 3; i++) {
                 if (!window.__variantHasOwnStatus || window.__variantHasOwnStatus[i] !== true) {
-                    setVariantStatusText(i, message);
+                    setVariantStatusText(i, message, { own: false });
                 }
             }
+        }
+
+        function updateVariantPhase(id, phase, message) {
+            try {
+                const p = String(phase || '').toLowerCase();
+                if (p === 'done' || p === 'completed' || p === 'complete' || p === 'success') {
+                    markVariantDone(id);
+                    return;
+                }
+                // Phases that should defer to the global ticker (no per-variant ownership)
+                const waiting = /(queue|queued|pending|wait|connecting|prepare|preparing|openai|start|starting|connect|forbind|forber|venter)/i.test(p) || /(queue|queued|pending|wait|connecting|prepare|preparing|openai|start|starting|connect|forbind|forber|venter)/i.test(String(message||''));
+                if (waiting) {
+                    // Show a soft hint once; allow global ticker to keep updating time
+                    setVariantStatusText(id, getElapsedLabel(), { own: false });
+                    return;
+                }
+                // Progress phases that can own their status line
+                let label = '';
+                if (/thinking|analy|reason|overvej/i.test(p)) label = 'Tænker…';
+                else if (/using-tools|tools|retriev|hent|kilder/i.test(p)) label = 'Finder kilder…';
+                else if (/draft|skriv|write|stream|compose/i.test(p)) label = 'Skriver…';
+                else if (/plan|structure|outline/i.test(p)) label = 'Strukturerer…';
+                else label = (typeof message === 'string' && message.trim()) ? message : 'Arbejder…';
+                const withTime = `${label} ${getElapsedLabel().replace(/^Tænker…\s*/, '')}`;
+                setVariantStatusText(id, withTime, { own: true });
+            } catch {}
         }
 
         async function startSummarizeViaFetch(hearingId, opts = {}) {
@@ -2238,22 +2334,7 @@
                             try { obj = JSON.parse(dataStr || '{}'); } catch (_) {}
                             if (obj && obj.variant) {
                                 markActivity();
-                                // Remove thinking ticker for this variant (completed)
-                                const card = document.querySelector(`[data-variant-id="${obj.variant.id}"]`);
-                                if (card) {
-                                    const statusEl = card.querySelector('.summary-status');
-                                    const ticker = statusEl && statusEl.querySelector('.thinking-ticker');
-                                    if (ticker) ticker.remove();
-                                    // Ensure a single done indicator
-                                    const existingDone = statusEl && statusEl.querySelector('.text-success');
-                                    if (!existingDone) {
-                                        const doneEl = document.createElement('div');
-                                        doneEl.className = 'text-success';
-                                        doneEl.textContent = 'Færdig';
-                                        statusEl.appendChild(doneEl);
-                                    }
-                                    try { dedupeDoneIndicatorsForCard(card); } catch {}
-                                }
+                                try { markVariantDone(obj.variant.id); } catch {}
                                 // Persist markdown on the card for deterministic preview rendering
                                 try {
                                     const v = obj.variant;
@@ -2282,9 +2363,8 @@
                             // Do not abort on 'body' status; server continues with provided data anyway
                             const card = obj && obj.id ? document.querySelector(`[data-variant-id="${obj.id}"]`) : null;
                             if (card) {
-                                setVariantStatusText(obj.id, obj.message || `Status: ${obj.phase}`);
+                                updateVariantPhase(obj.id, obj.phase, obj.message);
                                 const phase = String(obj.phase||'').toLowerCase();
-                                // Only treat real progress phases as activity; allow fallback during early phases
                                 const isProgress = ['started','thinking','drafting','done','streaming','using-tools','preparing','queued','connecting'].includes(phase);
                                 if (isProgress) markActivity();
                             } else {
@@ -2294,7 +2374,6 @@
                                 if (phase !== 'openai' && obj && obj.message) {
                                     broadcastGlobalStatus(obj.message);
                                 }
-                                // Do not treat global status as activity; fallback may still be needed
                             }
                         } else if (eventName === 'error') {
                             let obj = {};
@@ -2318,6 +2397,7 @@
                         } else if (eventName === 'end') {
                             showSuccess('Færdig! Vælg den bedste opsummering og download som DOCX.');
                             try { document.getElementById('genProgress').style.display = 'none'; } catch {}
+                            try { stopGlobalThinkingTicker(); } catch {}
                             if (fallbackTimer) { clearTimeout(fallbackTimer); fallbackTimer = null; }
                             // If any variants missing, salvage from drafts
                             salvageFromDrafts();
@@ -2457,18 +2537,7 @@
                         const obj = JSON.parse(ev.data||'{}');
                         if (obj && obj.variant) {
                             gotVariantSignal = true;
-                            // Remove thinking ticker for this variant (completed)
-                            const card = document.querySelector(`[data-variant-id="${obj.variant.id}"]`);
-                            if (card) {
-                                const statusEl = card.querySelector('.summary-status');
-                                const ticker = statusEl && statusEl.querySelector('.thinking-ticker');
-                                if (ticker) ticker.remove();
-                                const doneEl = document.createElement('div');
-                                doneEl.className = 'text-success';
-                                doneEl.textContent = 'Færdig';
-                                statusEl.appendChild(doneEl);
-                                try { dedupeDoneIndicatorsForCard(card); } catch {}
-                            }
+                            try { markVariantDone(obj.variant.id); } catch {}
                             // Persist markdown for deterministic preview rendering
                             try {
                                 const v = obj.variant;
@@ -2500,30 +2569,7 @@
                         const card = obj && obj.id ? document.querySelector(`[data-variant-id="${obj.id}"]`) : null;
                         if (card) {
                             gotVariantSignal = true;
-                            const el = card.querySelector('.summary-status');
-                            if (el) {
-                                const msg = obj.message || '';
-                                let existing = el.querySelector('.thinking-ticker');
-                                if (!existing) {
-                                    el.innerHTML = `
-                                        <div class="thinking-ticker" aria-live="polite" aria-atomic="true">
-                                            <span class="thinking-dot"></span>
-                                            <span class="thinking-dot"></span>
-                                            <span class="thinking-dot"></span>
-                                            <span class="thinking-text"></span>
-                                        </div>`;
-                                    existing = el.querySelector('.thinking-ticker');
-                                }
-                                const textEl = existing.querySelector('.thinking-text');
-                                if (textEl) textEl.textContent = msg;
-                                if (window.__variantHasOwnStatus && Number.isFinite(obj.id)) window.__variantHasOwnStatus[obj.id] = true;
-                                // If variant marked done, stop its animation immediately
-                                if (String(obj.phase||'').toLowerCase() === 'done') {
-                                    const ticker = el.querySelector('.thinking-ticker');
-                                    if (ticker) ticker.remove();
-                                    try { const card = document.querySelector(`[data-variant-id="${obj.id}"]`); if (card) dedupeDoneIndicatorsForCard(card); } catch {}
-                                }
-                            }
+                            updateVariantPhase(obj.id, obj.phase, obj.message);
                         } else {
                             // Avoid broadcasting OpenAI connection status to all variants
                             const phase = String(obj && obj.phase || '').toLowerCase();
@@ -2561,6 +2607,7 @@
                     const progressBar = document.getElementById('progressBar');
                     if (progressBar) progressBar.style.width = '100%';
                     setTimeout(() => { document.getElementById('genProgress').style.display = 'none'; }, 500);
+                    try { stopGlobalThinkingTicker(); } catch {}
                     try { es.close(); } catch {}
                     try { if (window.__genEventSource === es) window.__genEventSource = null; } catch {}
                     try { clearTimeout(getSseRescue); } catch {}
@@ -2661,6 +2708,7 @@
                     if (Object.keys(overrides).length) bodyData.edits = overrides;
                 }
             } catch {}
+            try { window.__expectedVariants = Number(bodyData.n || 3); } catch {}
             setProgress('Opretter baggrundsjob…');
             const createResp = await fetchWithTimeout(`/api/jobs/summarize/${encodeURIComponent(hearingId)}?t=${Date.now()}`, {
                 method: 'POST', headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-cache, no-store, must-revalidate', 'Pragma': 'no-cache', 'X-Bypass-Cache': '1' }, body: JSON.stringify(bodyData), cache: 'no-store'
@@ -2724,7 +2772,7 @@
                         if (!v) continue;
                         const vid = coerceVariantId(v.id);
                         const vidKey = String(vid);
-                        if (v.phase || v.state) setVariantStatusText(vid, (v.phase || v.state || '').toString());
+                        if (v.phase || v.state) updateVariantPhase(vid, (v.phase || v.state || '').toString(), v.message || '');
                         const hasContentInline = (typeof v.markdown === 'string' && v.markdown.trim().length) || (typeof v.summary === 'string' && v.summary.trim().length);
                         const variantLooksDone = v.done === true || isCompletedState(v.state) || String(v.phase||'').toLowerCase() === 'done' || hasContentInline;
                         if (variantLooksDone && !seenVariants.has(vidKey)) {
@@ -2733,6 +2781,7 @@
                                     const variantObj = { id: vid, markdown: v.markdown || '', summary: v.summary || '', headings: v.headings || [] };
                                     lastSummaries.push(variantObj);
                                     renderSummaryVariants(lastSummaries);
+                                    try { markVariantDone(vid); } catch {}
                                     seenVariants.add(vidKey);
                                 } else {
                                     const r2 = await fetchWithTimeout(`/api/jobs/${encodeURIComponent(jobId)}/variant/${encodeURIComponent(vidKey)}?t=${Date.now()}`, { cache: 'no-store', headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate', 'Pragma': 'no-cache', 'X-Bypass-Cache': '1' } }, 60000);
@@ -2741,6 +2790,7 @@
                                         const variantObj = { id: vid, markdown: j2.markdown || '', summary: j2.summary || '', headings: j2.headings || [] };
                                         lastSummaries.push(variantObj);
                                         renderSummaryVariants(lastSummaries);
+                                        try { markVariantDone(vid); } catch {}
                                         seenVariants.add(vidKey);
                                     }
                                 }
@@ -2753,6 +2803,7 @@
                     clearInterval(ticker);
                     try { clearTimeout(rescueTimer); } catch {}
                     try { document.getElementById('genProgress').style.display = 'none'; } catch {}
+                    try { stopGlobalThinkingTicker(); } catch {}
                     // Final safety: if any variants are missing from UI, fetch them directly now
                     try {
                         const expected = Number(bodyData && bodyData.n ? bodyData.n : 3);
@@ -2794,6 +2845,7 @@
                     clearInterval(ticker);
                     try { clearTimeout(rescueTimer); } catch {}
                     showError('Job fejlede/blev annulleret.');
+                    try { stopGlobalThinkingTicker(); } catch {}
                     try { document.getElementById('genBtn').disabled = false; } catch {}
                     return true;
                 }
