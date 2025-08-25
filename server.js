@@ -3469,13 +3469,8 @@ app.post('/api/summarize/:id', express.text({ type: 'application/json', limit: '
                     }
                 }
             } catch (_) {}
-            try {
-                if (!res.writableEnded) {
-                    res.end();
-                    logDebug('[summarize] Client disconnected, closing SSE connection.');
-                }
-            } catch {}
-            resolve(); // Resolve the main promise on client disconnect
+            // Do not resolve here; allow summarization worker to complete and record recent variants in memory
+            try { if (!res.writableEnded) logDebug('[summarize] Client disconnected; continuing generation off-connection'); } catch {}
         });
 
         (async () => {
