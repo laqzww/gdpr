@@ -394,7 +394,7 @@
         <div class="search-box">
             <div class="search-input-group">
                 <svg class="icon icon-lg" style="color: var(--color-gray-400);">
-                    <use href="/icons.svg#icon-search"></use>
+                    <use href="/icons.svg?v=2#icon-search"></use>
                 </svg>
                 <input 
                     type="text" 
@@ -431,7 +431,7 @@
                 <h2 style="font-size: var(--font-size-2xl); margin: 0;">Bekræft valg</h2>
                 <button class="btn btn-icon btn-ghost" onclick="closeHearingModal()" aria-label="Luk">
                     <svg class="icon">
-                        <use href="/icons.svg#icon-close"></use>
+                        <use href="/icons.svg?v=2#icon-close"></use>
                     </svg>
                 </button>
             </div>
@@ -443,13 +443,13 @@
             <div class="modal-footer">
                 <button class="btn btn-secondary" onclick="closeHearingModal()">
                     <svg class="icon">
-                        <use href="/icons.svg#icon-close"></use>
+                        <use href="/icons.svg?v=2#icon-close"></use>
                     </svg>
                     Annuller
                 </button>
                 <button class="btn btn-primary" onclick="proceedWithHearing()">
                     <svg class="icon">
-                        <use href="/icons.svg#icon-arrow-right"></use>
+                        <use href="/icons.svg?v=2#icon-arrow-right"></use>
                     </svg>
                     Start opsummering
                 </button>
@@ -474,7 +474,7 @@
             const iconName = type === 'error' ? 'icon-warning' : type === 'success' ? 'icon-check' : 'icon-info';
             notification.innerHTML = `
                 <svg class="icon">
-                    <use href="/icons.svg#${iconName}"></use>
+                    <use href="/icons.svg?v=2#${iconName}"></use>
                 </svg>
                 <span>${message}</span>
             `;
@@ -655,7 +655,7 @@
                 return `
                 <div class="suggestion-item" data-id="${h.id}" data-deadline="${h.deadline || ''}" data-status="${h.status || ''}" onclick="selectHearing('${h.id}')" onmouseover="preloadHearing('${h.id}')">
                     <svg class="icon suggestion-icon">
-                        <use href="/icons.svg#icon-document"></use>
+                        <use href="/icons.svg?v=2#icon-document"></use>
                     </svg>
                     <div class="suggestion-content">
                         <div class="suggestion-title">${safeTitle}</div>
@@ -665,7 +665,7 @@
                             </span>
                             <span style="display: flex; align-items: center; gap: var(--space-xs);">
                                 <svg class="icon icon-sm" style="color: var(--color-gray-400);">
-                                    <use href="/icons.svg#icon-calendar"></use>
+                                    <use href="/icons.svg?v=2#icon-calendar"></use>
                                 </svg>
                                 ${h.deadline ? new Date(h.deadline).toLocaleDateString('da-DK', { day: '2-digit', month: 'short', year: 'numeric' }) : 'Ingen frist'}
                             </span>
@@ -735,7 +735,7 @@
                 <div class="detail-row">
                     <span class="detail-label">
                         <svg class="icon icon-sm">
-                            <use href="/icons.svg#icon-document"></use>
+                            <use href="/icons.svg?v=2#icon-document"></use>
                         </svg>
                         Titel
                     </span>
@@ -744,7 +744,7 @@
                 <div class="detail-row">
                     <span class="detail-label">
                         <svg class="icon icon-sm">
-                            <use href="/icons.svg#icon-${isOpen ? 'check' : 'warning'}"></use>
+                            <use href="/icons.svg?v=2#icon-${isOpen ? 'check' : 'warning'}"></use>
                         </svg>
                         Status
                     </span>
@@ -757,7 +757,7 @@
                 <div class="detail-row">
                     <span class="detail-label">
                         <svg class="icon icon-sm">
-                            <use href="/icons.svg#icon-calendar"></use>
+                            <use href="/icons.svg?v=2#icon-calendar"></use>
                         </svg>
                         Frist
                     </span>

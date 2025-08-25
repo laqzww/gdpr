@@ -123,7 +123,7 @@
         .wizard-step {
             display: flex;
             align-items: center;
-            gap: var(--space);
+            gap: calc(var(--space) + 4px);
             padding: var(--space-sm) var(--space-xl);
             border-radius: var(--radius-full);
             cursor: pointer;
@@ -466,11 +466,14 @@
                 flex-direction: column;
                 gap: var(--space-md);
                 text-align: center;
+                align-items: stretch;
             }
             
             .header-actions {
                 width: 100%;
                 justify-content: center;
+                flex-wrap: wrap;
+                gap: var(--space-sm);
             }
             
             .wizard-steps {
@@ -485,6 +488,14 @@
                 grid-template-columns: 1fr;
             }
             
+            /* Mobile header tuning */
+            .header-left { width: 100%; gap: var(--space-md); }
+            .header-left > div { min-width: 0; }
+            .header-logo { width: 56px; height: 56px; }
+            .header-title { font-size: var(--font-size-xl); line-height: 1.25; overflow-wrap: anywhere; word-break: break-word; }
+            .header-meta { flex-wrap: wrap; justify-content: center; gap: var(--space-sm); }
+            #headerLink { max-width: 100%; }
+
             .action-section {
                 flex-direction: row;
                 align-items: center;
@@ -641,19 +652,19 @@
                         <div class="header-meta">
                             <span class="status-badge" id="headerStatusBadge">
                                 <svg class="icon icon-sm">
-                                    <use href="/icons.svg#icon-info"></use>
+                                    <use href="/icons.svg?v=2#icon-info"></use>
                                 </svg>
                                 <span id="headerStatus">-</span>
                             </span>
                             <span style="display: flex; align-items: center; gap: var(--space-xs);">
                                 <svg class="icon icon-sm">
-                                    <use href="/icons.svg#icon-calendar"></use>
+                                    <use href="/icons.svg?v=2#icon-calendar"></use>
                                 </svg>
                                 <span id="headerDeadline">-</span>
                             </span>
                             <a id="headerLink" href="#" target="_blank" class="btn btn-sm btn-ghost" style="color: var(--color-white);">
                                 <svg class="icon icon-sm">
-                                    <use href="/icons.svg#icon-link"></use>
+                                    <use href="/icons.svg?v=2#icon-link"></use>
                                 </svg>
                                 Se på Bliv hørt
                             </a>
@@ -663,13 +674,13 @@
                 <div class="header-actions">
                     <a href="/" class="btn btn-secondary">
                         <svg class="icon">
-                            <use href="/icons.svg#icon-arrow-left"></use>
+                            <use href="/icons.svg?v=2#icon-arrow-left"></use>
                         </svg>
                         Tilbage
                     </a>
                     <button class="btn btn-secondary" onclick="refreshFromNetwork()" title="Hent frisk data">
                         <svg class="icon">
-                            <use href="/icons.svg#icon-refresh"></use>
+                            <use href="/icons.svg?v=2#icon-refresh"></use>
                         </svg>
                         <span class="hide-mobile">Opdater</span>
                     </button>
@@ -687,33 +698,33 @@
                 <button class="wizard-step active" onclick="goToStep(1)" id="wizardStep1">
                     <span class="wizard-step-number">
                         <svg class="icon icon-sm" id="stepIcon1">
-                            <use href="/icons.svg#icon-document"></use>
+                            <use href="/icons.svg?v=2#icon-document"></use>
                         </svg>
                     </span>
                     <span class="wizard-step-label">Høringssvar</span>
                 </button>
                 
                 <svg class="icon" style="color: var(--color-gray-300);">
-                    <use href="/icons.svg#icon-arrow-right"></use>
+                    <use href="/icons.svg?v=2#icon-arrow-right"></use>
                 </svg>
                 
                 <button class="wizard-step" onclick="goToStep(2)" id="wizardStep2">
                     <span class="wizard-step-number">
                         <svg class="icon icon-sm" id="stepIcon2">
-                            <use href="/icons.svg#icon-attachment"></use>
+                            <use href="/icons.svg?v=2#icon-attachment"></use>
                         </svg>
                     </span>
                     <span class="wizard-step-label">Materialer</span>
                 </button>
                 
                 <svg class="icon" style="color: var(--color-gray-300);">
-                    <use href="/icons.svg#icon-arrow-right"></use>
+                    <use href="/icons.svg?v=2#icon-arrow-right"></use>
                 </svg>
                 
                 <button class="wizard-step" onclick="goToStep(3)" id="wizardStep3">
                     <span class="wizard-step-number">
                         <svg class="icon icon-sm" id="stepIcon3">
-                            <use href="/icons.svg#icon-magic"></use>
+                            <use href="/icons.svg?v=2#icon-magic"></use>
                         </svg>
                     </span>
                     <span class="wizard-step-label">Opsummér</span>
@@ -727,7 +738,7 @@
             <div class="mb-lg">
                 <h2 class="flex items-center gap-md">
                     <svg class="icon icon-lg" style="color: var(--color-primary);">
-                        <use href="/icons.svg#icon-document"></use>
+                        <use href="/icons.svg?v=2#icon-document"></use>
                     </svg>
                     Forbered høringssvar
                 </h2>
@@ -737,7 +748,7 @@
                 <div class="mt-sm" style="display: flex; gap: var(--space-sm);">
                     <button class="btn btn-secondary" id="autoClassifyBtn" onclick="autoClassifyRespondents()" title="Udfyld automatisk respondentnavn og -type med AI">
                         <svg class="icon">
-                            <use href="/icons.svg#icon-magic"></use>
+                            <use href="/icons.svg?v=2#icon-magic"></use>
                         </svg>
                         Udfyld navne/typer (AI)
                     </button>
@@ -766,7 +777,7 @@
             <div class="mb-lg">
                 <h2 class="flex items-center gap-md">
                     <svg class="icon icon-lg" style="color: var(--color-primary);">
-                        <use href="/icons.svg#icon-attachment"></use>
+                        <use href="/icons.svg?v=2#icon-attachment"></use>
                     </svg>
                     Vælg materialer
                 </h2>
@@ -781,7 +792,7 @@
                 <div class="mt-xl">
                     <label class="btn btn-secondary" style="cursor: pointer;">
                         <svg class="icon">
-                            <use href="/icons.svg#icon-upload"></use>
+                            <use href="/icons.svg?v=2#icon-upload"></use>
                         </svg>
                         Upload eget dokument
                             <input type="file" id="uploadInput" style="display: none" onchange="handleUpload(event)">
@@ -810,13 +821,13 @@
             <div class="mb-lg" style="text-align: center;">
                 <h2 class="flex items-center gap-md">
                     <svg class="icon icon-lg" style="color: var(--color-primary);">
-                        <use href="/icons.svg#icon-magic"></use>
+                        <use href="/icons.svg?v=2#icon-magic"></use>
                     </svg>
                     Vælg opsummering
                 </h2>
                 <button id="genBtn" class="btn btn-primary btn-lg" onclick="generateSummaries()" style="margin: 80px auto;">
                     <svg class="icon">
-                        <use href="/icons.svg#icon-magic"></use>
+                        <use href="/icons.svg?v=2#icon-magic"></use>
                     </svg>
                     Generér opsummeringer
                 </button>
@@ -846,13 +857,13 @@
             <div class="action-buttons">
                 <button class="btn btn-primary" onclick="downloadSelectedDocx()" id="downloadBtn" style="display: none;">
                     <svg class="icon">
-                        <use href="/icons.svg#icon-download"></use>
+                        <use href="/icons.svg?v=2#icon-download"></use>
                     </svg>
                     Download DOCX
                 </button>
                 <button class="btn btn-secondary" onclick="testDocxBuilder()" id="testBtn" style="display:none;">
                     <svg class="icon">
-                        <use href="/icons.svg#icon-check"></use>
+                        <use href="/icons.svg?v=2#icon-check"></use>
                     </svg>
                     Test DOCX-bygger
                 </button>
@@ -1412,21 +1423,21 @@
                     <div class="material-card selected" id="material-${idx}" onclick="toggleMaterialCard(${idx})">
                         <div class="material-icon">
                             <svg class="icon icon-lg">
-                                <use href="/icons.svg#icon-${isFile ? 'document' : 'info'}"></use>
+                                <use href="/icons.svg?v=2#icon-${isFile ? 'document' : 'info'}"></use>
                             </svg>
                         </div>
                         <div class="material-title">${material.title}</div>
                         ${material.description ? `<div class="material-description">${material.description}</div>` : ''}
                         ${!isFile && material.content ? `
                             <button class="btn btn-sm btn-secondary mt-sm" onclick="event.stopPropagation(); openMaterial(${idx});">
-                                <svg class="icon icon-sm"><use href="/icons.svg#icon-eye"></use></svg>
+                                <svg class="icon icon-sm"><use href="/icons.svg?v=2#icon-eye"></use></svg>
                                 Læs tekst
                             </button>
                         ` : ''}
                         ${(material.url || material.path) ? `
                             <a href="${toDirectBlivhortFileUrl(material.url || material.path, material.title)}" target="_blank" class="btn btn-sm btn-secondary mt-md" onclick="event.stopPropagation()">
                                 <svg class="icon icon-sm">
-                                    <use href="/icons.svg#icon-link"></use>
+                                    <use href="/icons.svg?v=2#icon-link"></use>
                                 </svg>
                                 Åbn dokument
                             </a>
@@ -1627,7 +1638,7 @@
             const iconName = type === 'error' ? 'icon-warning' : type === 'success' ? 'icon-check' : 'icon-info';
             notification.innerHTML = `
                 <svg class="icon">
-                    <use href="/icons.svg#${iconName}"></use>
+                    <use href="/icons.svg?v=2#${iconName}"></use>
                 </svg>
                 <span>${message}</span>
             `;
@@ -2815,7 +2826,7 @@
                                    class="summary-radio" onchange="selectSummaryVariant(${v.id})" />
                             <h4 class="flex items-center gap-sm">
                                 <svg class="icon" style="color: var(--color-primary);">
-                                    <use href="/icons.svg#icon-magic"></use>
+                                    <use href="/icons.svg?v=2#icon-magic"></use>
                                 </svg>
                                 Variant ${v.id}
                             </h4>
@@ -2909,7 +2920,7 @@
                     <input type="radio" name="summaryChoice" value="${id}" ${id===1?'checked':''} class="summary-radio" onchange="selectSummaryVariant(${id})" />
                     <h4 class="flex items-center gap-sm">
                         <svg class="icon" style="color: var(--color-primary);">
-                            <use href="/icons.svg#icon-magic"></use>
+                            <use href="/icons.svg?v=2#icon-magic"></use>
                         </svg>
                         Variant ${id}
                     </h4>
