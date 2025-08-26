@@ -2690,7 +2690,18 @@ app.get('/api/hearing/:id/responses', async (req, res) => {
             if (cached) return res.json(cached);
         }
         const baseUrl = 'https://blivhoert.kk.dk';
-        const axiosInstance = axios.create({ headers: { 'User-Agent': 'Mozilla/5.0', 'Cookie': 'kk-xyz=1', 'Referer': `${baseUrl}/hearing/${hearingId}/comments` }, timeout: 30000 });
+        const axiosInstance = axios.create({
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/json',
+                'Accept-Language': 'da-DK,da;q=0.9,en;q=0.8',
+                'X-Requested-With': 'XMLHttpRequest',
+                'Cookie': 'kk-xyz=1',
+                'Referer': `${baseUrl}/hearing/${hearingId}/comments`,
+                'Origin': baseUrl
+            },
+            timeout: 30000
+        });
         // HTML route
         const first = await withRetries(() => fetchCommentsPage(baseUrl, hearingId, 1, axiosInstance), { attempts: 3, baseDelayMs: 600 });
         let htmlResponses = first.responses || [];
@@ -2737,7 +2748,24 @@ app.get('/api/hearing/:id/responses', async (req, res) => {
         const apiBaseUrl = `${baseUrl}/api`;
         const viaApi = await withRetries(() => fetchCommentsViaApi(apiBaseUrl, hearingId, axiosInstance), { attempts: 2, baseDelayMs: 500 });
         const merged = mergeResponsesPreferFullText(htmlResponses, viaApi.responses || []);
-        const normalized = normalizeResponses(merged);
+        let normalized = normalizeResponses(merged);
+
+        // Defensive: if we only got exactly 12, try a small extra loop over more pages
+        if (normalized.length === 12) {
+            try {
+                let pageIndex = 2;
+                let guard = 0;
+                while (guard < 10) {
+                    const result = await withRetries(() => fetchCommentsPage(baseUrl, hearingId, pageIndex, axiosInstance), { attempts: 2, baseDelayMs: 300 });
+                    const pageItems = Array.isArray(result.responses) ? result.responses : [];
+                    if (!pageItems.length) break;
+                    htmlResponses = htmlResponses.concat(pageItems);
+                    pageIndex += 1;
+                    guard += 1;
+                }
+                normalized = normalizeResponses(mergeResponsesPreferFullText(htmlResponses, viaApi.responses || []));
+            } catch {}
+        }
         const payload = { success: true, totalResponses: normalized.length, responses: normalized };
         cacheSet(hearingResponsesCache, hearingId, payload);
         if (PERSIST_ALWAYS_WRITE) {
@@ -2770,6 +2798,51 @@ app.get('/api/hearing/:id/materials', async (req, res) => {
                 const persisted = meta?.data;
                 if (persisted && Array.isArray(persisted.materials) && persisted.materials.length > 0) {
                     materials = persisted.materials.map(m => ({ type: m.type, title: m.title || null, url: m.url || null, content: m.content || null }));
+                }
+            }
+            // If still empty, try to extract directly from the hearing root HTML (__NEXT_DATA__) and simple anchor scan
+            if (!materials || materials.length === 0) {
+                const baseUrl = 'https://blivhoert.kk.dk';
+                const axiosInstance = axios.create({
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
+                        'Accept': 'text/html,application/xhtml+xml,application/json',
+                        'Accept-Language': 'da-DK,da;q=0.9,en;q=0.8',
+                        'Cookie': 'kk-xyz=1',
+                        'Origin': baseUrl,
+                        'Referer': baseUrl
+                    },
+                    timeout: 20000
+                });
+                try {
+                    const root = await fetchHearingRootPage(baseUrl, hearingId, axiosInstance);
+                    if (Array.isArray(root.materials) && root.materials.length > 0) {
+                        materials = root.materials;
+                    } else {
+                        // Simple anchor fallback
+                        const url = `${baseUrl}/hearing/${hearingId}`;
+                        const r = await withRetries(() => axiosInstance.get(url, { validateStatus: () => true }), { attempts: 2, baseDelayMs: 300 });
+                        if (r.status === 200 && r.data) {
+                            const $ = cheerio.load(r.data);
+                            const list = [];
+                            $('a[href]').each((_, el) => {
+                                const href = String($(el).attr('href') || '').trim();
+                                if (/\.(pdf|doc|docx|xls|xlsx)(\?|$)/i.test(href)) {
+                                    const title = ($(el).text() || '').trim();
+                                    const abs = href.startsWith('http') ? href : `${baseUrl}${href.startsWith('/')?'':'/'}${href}`;
+                                    list.push({ type: 'file', title: title || 'Dokument', url: abs });
+                                }
+                            });
+                            if (list.length) materials = list;
+                        }
+                    }
+                } catch {}
+                // Persist if configured
+                if (PERSIST_ALWAYS_WRITE) {
+                    const meta = readPersistedHearingWithMeta(hearingId);
+                    const existing = meta?.data || { success: true, hearing: { id: Number(hearingId) }, responses: [] };
+                    const merged = { ...existing, materials: materials || [] };
+                    writePersistedHearing(hearingId, merged);
                 }
             }
             return res.json({ success: true, materials: materials || [] });
