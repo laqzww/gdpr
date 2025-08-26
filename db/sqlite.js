@@ -71,9 +71,17 @@ function attemptRebuildOnce(hintError) {
 
 // Detect if running on Render by checking for RENDER environment variable
 const isRender = process.env.RENDER === 'true';
+// On Render, the working directory is /opt/render/project/src
 const DB_PATH = process.env.DB_PATH || (isRender 
-    ? '/opt/render/project/src/fetcher/data/app.sqlite' 
+    ? path.join(process.cwd(), 'fetcher/data/app.sqlite')
     : path.join(__dirname, '..', 'data', 'app.sqlite'));
+
+console.log('[SQLite] Environment:', {
+    isRender,
+    DB_PATH,
+    cwd: process.cwd(),
+    __dirname
+});
 
 let db = null;
 
