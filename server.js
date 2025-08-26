@@ -1567,6 +1567,42 @@ app.get('/api/hearing-index', async (req, res) => {
     }
 });
 
+// Diagnostics: force warm-up now and report item count
+app.get('/api/warm-now', async (req, res) => {
+    try {
+        await warmHearingIndex();
+        return res.json({ success: true, count: Array.isArray(hearingIndex) ? hearingIndex.length : 0 });
+    } catch (e) {
+        return res.status(500).json({ success: false, error: e.message });
+    }
+});
+
+// Diagnostics: verify outbound connectivity to blivhoert API
+app.get('/api/test-outbound', async (req, res) => {
+    try {
+        const baseUrl = 'https://blivhoert.kk.dk';
+        const url = `${baseUrl}/api/hearing?PageIndex=1&PageSize=3`;
+        const axiosInstance = axios.create({
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
+                'Accept': 'application/json',
+                'Accept-Language': 'da-DK,da;q=0.9,en;q=0.8',
+                'Referer': baseUrl,
+                'Cookie': 'kk-xyz=1'
+            },
+            timeout: 20000,
+            validateStatus: () => true
+        });
+        const r = await axiosInstance.get(url);
+        const ct = (r.headers && (r.headers['content-type'] || r.headers['Content-Type'])) || '';
+        let sample = '';
+        try { sample = JSON.stringify(r.data).slice(0, 500); } catch { sample = String(r.data).slice(0, 500); }
+        return res.json({ success: true, status: r.status, contentType: ct, hasData: !!r.data, sample });
+    } catch (e) {
+        return res.status(500).json({ success: false, error: e.message, code: e.code || null });
+    }
+});
+
 // Full hearings index with optional filtering and ordering
 app.get('/api/hearings', (req, res) => {
     try {
