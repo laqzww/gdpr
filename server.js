@@ -4257,7 +4257,7 @@ app.get('/api/db-status', (req, res) => {
     try {
         const isRender = process.env.RENDER === 'true';
         const dbPath = process.env.DB_PATH || (isRender 
-            ? path.join(process.cwd(), 'fetcher/data/app.sqlite')
+            ? '/opt/render/project/src/fetcher/data/app.sqlite'
             : path.join(__dirname, 'data', 'app.sqlite'));
         const status = {
             dbPath: dbPath,
