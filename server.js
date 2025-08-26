@@ -4198,6 +4198,18 @@ app.post('/api/client-log', express.json({ limit: '256kb' }), (req, res) => {
 app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
 app.get('/healthz', (req, res) => res.status(200).json({ status: 'ok' }));
 
+// Force database re-initialization endpoint
+app.post('/api/db-reinit', (req, res) => {
+    try {
+        console.log('[API] Forcing database re-initialization...');
+        initDb();
+        res.json({ success: true, message: 'Database re-initialized' });
+    } catch (e) {
+        console.error('[API] Database re-init failed:', e);
+        res.status(500).json({ success: false, error: e.message, stack: e.stack });
+    }
+});
+
 // Database status endpoint for debugging
 app.get('/api/db-status', (req, res) => {
     try {
@@ -4230,9 +4242,12 @@ app.get('/api/db-status', (req, res) => {
                 status.lastHearingUpdate = lastUpdate.last ? new Date(lastUpdate.last).toISOString() : null;
             } catch (e) {
                 status.error = e.message;
+                status.errorStack = e.stack;
             }
         } else {
             status.error = 'Database not initialized';
+            status.sqliteDb = !!sqliteDb;
+            status.sqliteDbPrepare = !!(sqliteDb && sqliteDb.prepare);
         }
         
         res.json(status);
