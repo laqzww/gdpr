@@ -1709,6 +1709,30 @@ app.get('/api/hearing-index', async (req, res) => {
             } catch (_) {}
         }
 
+        // Fallback: build from persisted JSON files under data/hearings if present
+        if (!Array.isArray(hearingIndex) || hearingIndex.length === 0) {
+            try {
+                const dir = path.join(__dirname, 'data', 'hearings');
+                const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter(f => f.endsWith('.json')) : [];
+                const items = [];
+                for (const f of files.slice(0, 1000)) {
+                    try {
+                        const raw = fs.readFileSync(path.join(dir, f), 'utf8');
+                        const json = JSON.parse(raw);
+                        const h = json && json.hearing;
+                        if (h && Number.isFinite(Number(h.id))) {
+                            items.push({ id: Number(h.id), title: h.title || `Høring ${h.id}`, startDate: h.startDate || null, deadline: h.deadline || null, status: h.status || null });
+                        }
+                    } catch {}
+                }
+                if (statusLike) {
+                    hearingIndex = items.filter(x => String(x.status || '').toLowerCase().includes(statusLike)).map(enrichHearingForIndex);
+                } else {
+                    hearingIndex = items.map(enrichHearingForIndex);
+                }
+            } catch {}
+        }
+
         // If still empty, warm from remote API
         if (!Array.isArray(hearingIndex) || hearingIndex.length === 0) {
             try { await warmHearingIndex(); } catch (_) {}
