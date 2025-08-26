@@ -1,66 +1,56 @@
 #!/bin/bash
-# Remote fix script - can be run via curl
-# Usage: curl -sL https://raw.githubusercontent.com/laqzww/fetcher/main/scripts/remote_fix.sh | bash
+# Remote fix script for Render database issues
+# Can be run via SSH: bash scripts/remote_fix.sh
 
-echo "[REMOTE FIX] Starting remote database fix..."
+set -e
+
+echo "[REMOTE FIX] Starting database fix..."
 echo "[REMOTE FIX] Current directory: $(pwd)"
+echo "[REMOTE FIX] User: $(whoami)"
 
-# Check if we're on Render
-if [ "$RENDER" != "true" ]; then
-    echo "[REMOTE FIX] ERROR: This script should only be run on Render"
-    exit 1
+# Navigate to correct directory
+cd /opt/render/project/src
+
+# Create symlink if needed
+if [ ! -e "/opt/render/project/src/data" ]; then
+    echo "[REMOTE FIX] Creating data symlink..."
+    ln -s fetcher/data /opt/render/project/src/data
 fi
 
-# Navigate to the correct directory
-cd /opt/render/project/src || {
-    echo "[REMOTE FIX] ERROR: Could not navigate to /opt/render/project/src"
-    exit 1
-}
+# Set environment variables
+export DB_PATH="/opt/render/project/src/fetcher/data/app.sqlite"
+export NODE_ENV="production"
+export RENDER="true"
 
-echo "[REMOTE FIX] Working directory: $(pwd)"
+echo "[REMOTE FIX] DB_PATH: $DB_PATH"
 
-# Create the force initialization script
-cat > force_init.js << 'EOF'
+# Create directory if needed
+mkdir -p $(dirname "$DB_PATH")
+
+# Run node script to initialize and populate database
+node -e "
+const Database = require('better-sqlite3');
+const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 
-console.log('[INIT] Force initializing database...');
-
-// Force the correct path
-const DB_PATH = '/opt/render/project/src/fetcher/data/app.sqlite';
-const DB_DIR = path.dirname(DB_PATH);
+console.log('[INIT] Starting database initialization...');
+const DB_PATH = process.env.DB_PATH || '/opt/render/project/src/fetcher/data/app.sqlite';
 
 // Ensure directory exists
-if (!fs.existsSync(DB_DIR)) {
-    console.log('[INIT] Creating directory:', DB_DIR);
-    fs.mkdirSync(DB_DIR, { recursive: true });
+const dbDir = path.dirname(DB_PATH);
+if (!fs.existsSync(dbDir)) {
+    fs.mkdirSync(dbDir, { recursive: true });
 }
 
-// Set environment variable
-process.env.DB_PATH = DB_PATH;
-process.env.RENDER = 'true';
+console.log('[INIT] Using database path:', DB_PATH);
 
-console.log('[INIT] Environment set:');
-console.log('  DB_PATH:', process.env.DB_PATH);
-console.log('  RENDER:', process.env.RENDER);
-
-// Load better-sqlite3 directly
-let Database;
-try {
-    Database = require('better-sqlite3');
-    console.log('[INIT] better-sqlite3 loaded successfully');
-} catch (e) {
-    console.error('[INIT] Failed to load better-sqlite3:', e.message);
-    process.exit(1);
-}
-
-// Initialize database
 try {
     const db = new Database(DB_PATH);
-    console.log('[INIT] Database opened at:', DB_PATH);
+    console.log('[INIT] Database opened successfully');
     
     // Create tables
-    db.exec(`
+    db.exec(\`
         CREATE TABLE IF NOT EXISTS hearings(
           id INTEGER PRIMARY KEY,
           title TEXT,
@@ -88,7 +78,7 @@ try {
           pdf_url TEXT,
           created_at INTEGER
         );
-    `);
+    \`);
     
     console.log('[INIT] Tables created');
     
@@ -128,13 +118,59 @@ async function fetchData() {
             
             if (response.status !== 200 || !response.data) break;
             
-            const hearings = response.data?.data || [];
-            if (hearings.length === 0) break;
+            const data = response.data;
+            const items = data?.data || [];
+            const included = data?.included || [];
             
-            console.log(\`[INIT] Page \${page}: Fetched \${hearings.length} hearings\`);
+            if (items.length === 0) break;
             
-            for (const h of hearings) {
-                stmt.run(h.id, h.title, h.startDate, h.deadline, h.status, Date.now());
+            // Build maps for lookups
+            const titleByContentId = new Map();
+            const statusById = new Map();
+            
+            // Extract titles from content
+            for (const inc of included) {
+                if (inc?.type === 'content') {
+                    const fieldId = inc?.relationships?.field?.data?.id;
+                    if (String(fieldId) === '1' && inc?.attributes?.textContent) {
+                        titleByContentId.set(String(inc.id), String(inc.attributes.textContent).trim());
+                    }
+                }
+                if (inc?.type === 'hearingStatus' && inc?.attributes?.name) {
+                    statusById.set(String(inc.id), inc.attributes.name);
+                }
+            }
+            
+            console.log(\`[INIT] Page \${page}: Fetched \${items.length} hearings\`);
+            
+            for (const item of items) {
+                if (item.type !== 'hearing') continue;
+                
+                const hId = Number(item.id);
+                const attrs = item.attributes || {};
+                
+                // Extract title
+                let title = '';
+                const contentRels = (item.relationships?.contents?.data) || [];
+                for (const cref of contentRels) {
+                    const cid = cref?.id && String(cref.id);
+                    if (cid && titleByContentId.has(cid)) {
+                        title = titleByContentId.get(cid);
+                        break;
+                    }
+                }
+                
+                if (!title) {
+                    title = attrs.esdhTitle || \`Høring \${hId}\`;
+                }
+                
+                // Extract status
+                const statusRelId = item.relationships?.hearingStatus?.data?.id;
+                const status = statusRelId && statusById.has(String(statusRelId)) 
+                    ? statusById.get(String(statusRelId))
+                    : 'Unknown';
+                
+                stmt.run(hId, title, attrs.startDate, attrs.deadline, status, Date.now());
                 totalFetched++;
             }
             
@@ -149,47 +185,27 @@ async function fetchData() {
         const count = db.prepare('SELECT COUNT(*) as count FROM hearings').get();
         console.log('[INIT] Total hearings stored:', count.count);
         
-    } catch (e) {
-        console.error('[INIT] Failed to fetch data:', e.message);
-    } finally {
+        const samples = db.prepare('SELECT id, title, status FROM hearings WHERE title NOT LIKE \"Høring %\" LIMIT 5').all();
+        console.log('[INIT] Sample hearings with titles:');
+        samples.forEach(h => {
+            console.log(\`  \${h.id}: \${h.title?.substring(0, 50)}... (\${h.status})\`);
+        });
+        
         db.close();
+        console.log('[INIT] Data fetch completed successfully!');
+        
+    } catch (e) {
+        console.error('[INIT] Data fetch failed:', e.message);
+        db.close();
+        process.exit(1);
     }
 }
 
-fetchData().then(() => {
-    console.log('[INIT] Complete! Database is ready.');
-    
-    // Create a flag file to indicate success
-    fs.writeFileSync('/opt/render/project/src/fetcher/data/.initialized', new Date().toISOString());
-    
-}).catch(e => {
+fetchData().catch(e => {
     console.error('[INIT] Fatal error:', e);
     process.exit(1);
 });
-EOF
+"
 
-echo "[REMOTE FIX] Running initialization script..."
-node force_init.js
-
-# Clean up
-rm -f force_init.js
-
-echo "[REMOTE FIX] Creating symlink for backward compatibility..."
-if [ ! -e /opt/render/project/src/data ]; then
-    ln -s fetcher/data /opt/render/project/src/data
-    echo "[REMOTE FIX] Symlink created"
-fi
-
-echo "[REMOTE FIX] Checking results..."
-if [ -f /opt/render/project/src/fetcher/data/.initialized ]; then
-    echo "[REMOTE FIX] ✓ Database initialized successfully!"
-    echo "[REMOTE FIX] ✓ Data has been fetched!"
-    echo ""
-    echo "[REMOTE FIX] The application should now work correctly."
-    echo "[REMOTE FIX] You may need to refresh the page or wait a moment for changes to take effect."
-else
-    echo "[REMOTE FIX] ✗ Initialization may have failed. Check the logs above."
-fi
-
-echo ""
-echo "[REMOTE FIX] Fix attempt completed."
+echo "[REMOTE FIX] Database fix completed!"
+echo "[REMOTE FIX] You can now check the status at: https://blivhort-ai.onrender.com/api/db-status"

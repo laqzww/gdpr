@@ -58,22 +58,71 @@ async function manualRefresh() {
                         break;
                     }
                     
-                    const hearings = apiResp.data?.data || [];
-                    if (hearings.length === 0) {
-                        console.log(`[MANUAL] No more hearings at page ${page}`);
+                    const data = apiResp.data;
+                    const items = data?.data || [];
+                    const included = data?.included || [];
+                    
+                    if (items.length === 0) {
+                        console.log(`[MANUAL] No more items at page ${page}`);
                         break;
                     }
                     
-                    console.log(`[MANUAL] Page ${page}: Found ${hearings.length} hearings`);
+                    // Build maps for lookups
+                    const titleByContentId = new Map();
+                    const statusById = new Map();
                     
-                    for (const h of hearings) {
-                        try {
-                            stmt.run(h.id, h.title, h.startDate, h.deadline, h.status, Date.now());
-                            totalFetched++;
-                        } catch (e) {
-                            console.error(`[MANUAL] Failed to insert hearing ${h.id}:`, e.message);
+                    for (const inc of included) {
+                        if (inc?.type === 'content') {
+                            const fieldId = inc?.relationships?.field?.data?.id;
+                            if (String(fieldId) === '1' && inc?.attributes?.textContent) {
+                                titleByContentId.set(String(inc.id), String(inc.attributes.textContent).trim());
+                            }
+                        }
+                        if (inc?.type === 'hearingStatus' && inc?.attributes?.name) {
+                            statusById.set(String(inc.id), inc.attributes.name);
                         }
                     }
+                    
+                    console.log(`[MANUAL] Page ${page}: Found ${items.length} hearings`);
+                    
+                    let pageStored = 0;
+                    for (const item of items) {
+                        if (item.type !== 'hearing') continue;
+                        
+                        const hId = Number(item.id);
+                        const attrs = item.attributes || {};
+                        
+                        // Extract title
+                        let title = '';
+                        const contentRels = (item.relationships?.contents?.data) || [];
+                        for (const cref of contentRels) {
+                            const cid = cref?.id && String(cref.id);
+                            if (cid && titleByContentId.has(cid)) {
+                                title = titleByContentId.get(cid);
+                                break;
+                            }
+                        }
+                        
+                        if (!title) {
+                            title = attrs.esdhTitle || `Høring ${hId}`;
+                        }
+                        
+                        // Extract status
+                        const statusRelId = item.relationships?.hearingStatus?.data?.id;
+                        const status = statusRelId && statusById.has(String(statusRelId)) 
+                            ? statusById.get(String(statusRelId))
+                            : 'Unknown';
+                        
+                        try {
+                            stmt.run(hId, title, attrs.startDate, attrs.deadline, status, Date.now());
+                            totalFetched++;
+                            pageStored++;
+                        } catch (e) {
+                            console.error(`[MANUAL] Failed to insert hearing ${hId}:`, e.message);
+                        }
+                    }
+                    
+                    console.log(`[MANUAL] Page ${page}: Stored ${pageStored} hearings`);
                     
                     page++;
                     if (page % 10 === 0) {
