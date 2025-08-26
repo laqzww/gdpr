@@ -1632,12 +1632,13 @@ app.get('/api/hearing-index', async (req, res) => {
         // If index is empty, first try to hydrate from SQLite
         if (!Array.isArray(hearingIndex) || hearingIndex.length === 0) {
             try {
-                if (sqliteDb && sqliteDb.prepare) {
+                const sqlite = require('./db/sqlite');
+                if (sqlite && sqlite.db && sqlite.db.prepare) {
                     let rows;
                     if (statusLike) {
-                        rows = sqliteDb.prepare(`SELECT id,title,start_date as startDate,deadline,status FROM hearings WHERE archived IS NOT 1 AND LOWER(status) LIKE '%' || ? || '%'`).all(statusLike);
+                        rows = sqlite.db.prepare(`SELECT id,title,start_date as startDate,deadline,status FROM hearings WHERE archived IS NOT 1 AND LOWER(status) LIKE '%' || ? || '%'`).all(statusLike);
                     } else {
-                        rows = sqliteDb.prepare(`SELECT id,title,start_date as startDate,deadline,status FROM hearings WHERE archived IS NOT 1`).all();
+                        rows = sqlite.db.prepare(`SELECT id,title,start_date as startDate,deadline,status FROM hearings WHERE archived IS NOT 1`).all();
                     }
                     hearingIndex = (rows || []).map(enrichHearingForIndex);
                 }
