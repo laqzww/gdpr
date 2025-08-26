@@ -265,10 +265,22 @@ try { fs.mkdirSync(path.join(__dirname, 'templates'), { recursive: true }); } ca
 try { fs.mkdirSync(path.join(__dirname, 'data'), { recursive: true }); } catch {}
 
 // Initialize SQLite and sessions
-try { initDb(); } catch (e) { console.error('SQLite init failed:', e.message); }
+console.log('[Server] Starting SQLite initialization...');
+console.log('[Server] Current directory:', __dirname);
+console.log('[Server] Data directory:', path.join(__dirname, 'data'));
+try { 
+    initDb(); 
+    console.log('[Server] SQLite initialized successfully');
+} catch (e) { 
+    console.error('[Server] SQLite init failed:', e.message);
+    console.error('[Server] Full error:', e);
+}
 app.use(session({
     store: SQLiteStore ? (SQLiteStore.length === 1
-        ? new SQLiteStore({ db: (process.env.SESSION_DB || 'sessions.sqlite'), dir: path.join(__dirname, 'data') })
+        ? new SQLiteStore({ 
+            db: (process.env.SESSION_DB || 'sessions.sqlite'), 
+            dir: process.env.DB_PATH ? path.dirname(process.env.DB_PATH) : path.join(__dirname, 'data') 
+          })
         : new SQLiteStore({ client: sqliteDb, cleanupInterval: 900000 })) : undefined,
     secret: process.env.SESSION_SECRET || 'dev-secret',
     resave: false,
@@ -4186,6 +4198,41 @@ app.post('/api/client-log', express.json({ limit: '256kb' }), (req, res) => {
 app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
 app.get('/healthz', (req, res) => res.status(200).json({ status: 'ok' }));
 
+// Database status endpoint for debugging
+app.get('/api/db-status', (req, res) => {
+    try {
+        const status = {
+            dbPath: process.env.DB_PATH || 'default',
+            dbExists: false,
+            hearingCount: 0,
+            responseCount: 0,
+            materialCount: 0,
+            lastHearingUpdate: null,
+            error: null
+        };
+        
+        if (sqliteDb && sqliteDb.prepare) {
+            try {
+                status.dbExists = true;
+                status.hearingCount = sqliteDb.prepare('SELECT COUNT(*) as count FROM hearings').get().count;
+                status.responseCount = sqliteDb.prepare('SELECT COUNT(*) as count FROM responses').get().count;
+                status.materialCount = sqliteDb.prepare('SELECT COUNT(*) as count FROM materials').get().count;
+                
+                const lastUpdate = sqliteDb.prepare('SELECT MAX(updated_at) as last FROM hearings').get();
+                status.lastHearingUpdate = lastUpdate.last ? new Date(lastUpdate.last).toISOString() : null;
+            } catch (e) {
+                status.error = e.message;
+            }
+        } else {
+            status.error = 'Database not initialized';
+        }
+        
+        res.json(status);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // Rebuild/warm hearings search index on demand (fire-and-forget)
 app.post('/api/rebuild-index', async (req, res) => {
     try {
@@ -4338,9 +4385,13 @@ server.listen(PORT, () => {
     // On deploy: run a full scrape/hydration once (non-blocking)
     (async () => {
         try {
+            console.log('[Server] Running startup data scrape...');
             const base = (process.env.PUBLIC_URL || '').trim() || `http://localhost:${PORT}`;
-            await axios.post(`${base}/api/run-daily-scrape`, { reason: 'startup' }, { validateStatus: () => true, timeout: 120000 });
-        } catch {}
+            const response = await axios.post(`${base}/api/run-daily-scrape`, { reason: 'startup' }, { validateStatus: () => true, timeout: 120000 });
+            console.log('[Server] Startup scrape response:', response.status, response.data);
+        } catch (e) {
+            console.error('[Server] Startup scrape failed:', e.message);
+        }
     })();
     // Periodic refresh to keep index robust
     const refreshMs = Number(process.env.INDEX_REFRESH_MS || (6 * 60 * 60 * 1000));
@@ -4484,6 +4535,49 @@ server.listen(PORT, () => {
             cron.schedule(jobCleanupSpec, () => {
                 try { cleanupOldJobs(); } catch {}
             });
+
+            // Hearing refresh cron job
+            const hearingRefreshSpec = resolveCronSpec(process.env.CRON_HEARING_REFRESH, '*/30 * * * *');
+            if (hearingRefreshSpec) {
+                console.log(`Setting up hearing refresh cron with schedule: ${hearingRefreshSpec}`);
+                cron.schedule(hearingRefreshSpec, async () => {
+                    try {
+                        console.log('[CRON] Starting hearing refresh job');
+                        const base = (process.env.PUBLIC_URL || '').trim() || `http://localhost:${PORT}`;
+                        
+                        // First, warm the hearing index
+                        await warmHearingIndex();
+                        
+                        // Then refresh hearings marked as 'Afventer konklusion'
+                        if (sqliteDb && sqliteDb.prepare) {
+                            const pendingHearings = sqliteDb.prepare(`
+                                SELECT id FROM hearings 
+                                WHERE archived IS NOT 1 
+                                AND LOWER(status) LIKE '%afventer konklusion%'
+                                ORDER BY updated_at ASC
+                                LIMIT 10
+                            `).all();
+                            
+                            console.log(`[CRON] Found ${pendingHearings.length} pending hearings to refresh`);
+                            
+                            for (const hearing of pendingHearings) {
+                                try {
+                                    await axios.post(`${base}/api/prefetch/${hearing.id}?apiOnly=1`, 
+                                        { reason: 'cron_refresh' }, 
+                                        { validateStatus: () => true, timeout: INTERNAL_API_TIMEOUT_MS }
+                                    );
+                                    console.log(`[CRON] Refreshed hearing ${hearing.id}`);
+                                } catch (e) {
+                                    console.error(`[CRON] Failed to refresh hearing ${hearing.id}:`, e.message);
+                                }
+                            }
+                        }
+                        console.log('[CRON] Hearing refresh job completed');
+                    } catch (e) {
+                        console.error('[CRON] Hearing refresh job failed:', e.message);
+                    }
+                });
+            }
         } catch (e) {
             console.warn('Cron setup failed:', e.message);
         }

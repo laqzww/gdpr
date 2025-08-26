@@ -74,14 +74,24 @@ const DB_PATH = process.env.DB_PATH || path.join(__dirname, '..', 'data', 'app.s
 let db = null;
 
 function init() {
+    console.log('[SQLite] Initializing database...');
+    console.log('[SQLite] DB_PATH:', DB_PATH);
+    console.log('[SQLite] DB directory exists:', fs.existsSync(path.dirname(DB_PATH)));
+    
     if (!Database) {
         throw new Error('better-sqlite3 is not installed');
     }
     // Attempt to open DB; if ABI mismatch occurs at instantiation, try a one-time rebuild
     try {
         // Ensure parent directory exists to avoid SQLITE_CANTOPEN errors
-        try { fs.mkdirSync(path.dirname(DB_PATH), { recursive: true }); } catch (_) {}
+        try { 
+            fs.mkdirSync(path.dirname(DB_PATH), { recursive: true }); 
+            console.log('[SQLite] Created directory:', path.dirname(DB_PATH));
+        } catch (e) {
+            console.log('[SQLite] Directory creation error (may already exist):', e.message);
+        }
         db = new Database(DB_PATH);
+        console.log('[SQLite] Database opened successfully');
     } catch (e) {
         if (needsRebuild(e) && process.env.ALLOW_RUNTIME_SQLITE_REBUILD === '1') {
             attemptRebuildOnce(e);

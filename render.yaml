@@ -18,7 +18,10 @@ services:
         echo 'No Python requirements.txt found, skipping'; \
       fi
     startCommand: >
-      bash -lc "mkdir -p data/uploads tmp &&
+      bash -lc "echo '[Render] Starting application...' &&
+      echo '[Render] Current directory: $(pwd)' &&
+      echo '[Render] Disk mount check:' && ls -la /opt/render/project/src/fetcher/ || true &&
+      mkdir -p data/uploads tmp &&
       rm -rf uploads &&
       ln -s data/uploads uploads || true &&
       if node -v | grep -q '^v20\.'; then
@@ -93,6 +96,8 @@ services:
         value: "*/30 * * * *"
       - key: SESSION_SECRET
         generateValue: true
+      - key: DB_PATH
+        value: "/opt/render/project/src/fetcher/data/app.sqlite"
     disks:
       - name: app-data
         mountPath: /opt/render/project/src/fetcher/data
