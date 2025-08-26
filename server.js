@@ -2512,13 +2512,29 @@ app.get('/api/hearing/:id/materials', async (req, res) => {
         if (!/^\d+$/.test(hearingId)) {
             return res.status(400).json({ success: false, message: 'Ugyldigt hørings-ID' });
         }
-        // DB-only
+        // Prefer DB, but gracefully fall back to persisted JSON if DB is unavailable/empty
         try {
-            const rows = sqliteDb && sqliteDb.prepare ? sqliteDb.prepare(`SELECT * FROM materials WHERE hearing_id=? ORDER BY idx ASC`).all(hearingId) : [];
-            const materials = (rows||[]).map(m => ({ type: m.type, title: m.title, url: m.url, content: m.content }));
-            return res.json({ success: true, materials });
+            const rows = (sqliteDb && sqliteDb.prepare)
+                ? sqliteDb.prepare(`SELECT * FROM materials WHERE hearing_id=? ORDER BY idx ASC`).all(hearingId)
+                : [];
+            let materials = (rows || []).map(m => ({ type: m.type, title: m.title, url: m.url, content: m.content }));
+            if (!materials || materials.length === 0) {
+                const meta = readPersistedHearingWithMeta(hearingId);
+                const persisted = meta?.data;
+                if (persisted && Array.isArray(persisted.materials) && persisted.materials.length > 0) {
+                    materials = persisted.materials.map(m => ({ type: m.type, title: m.title || null, url: m.url || null, content: m.content || null }));
+                }
+            }
+            return res.json({ success: true, materials: materials || [] });
         } catch {
-            return res.json({ success: true, materials: [] });
+            try {
+                const meta = readPersistedHearingWithMeta(hearingId);
+                const persisted = meta?.data;
+                const materials = (persisted && Array.isArray(persisted.materials)) ? persisted.materials : [];
+                return res.json({ success: true, materials });
+            } catch {
+                return res.json({ success: true, materials: [] });
+            }
         }
     } catch (e) {
         res.status(500).json({ success: false, message: 'Uventet fejl', error: e.message });
