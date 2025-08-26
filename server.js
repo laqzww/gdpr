@@ -1382,6 +1382,67 @@ async function warmHearingIndex() {
             } catch {}
         }
 
+        // Last-resort fallback: scrape homepage for hearing links and hydrate a seed set
+        if (!Array.isArray(hearingIndex) || hearingIndex.length === 0) {
+            try {
+                const resp = await withRetries(() => axios.get(baseUrl, {
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                        'Accept': 'text/html,application/xhtml+xml',
+                        'Accept-Language': 'da-DK,da;q=0.9,en;q=0.8',
+                        'Referer': baseUrl
+                    },
+                    timeout: 20000,
+                    validateStatus: () => true
+                }), { attempts: 2, baseDelayMs: 400 });
+                if (resp.status === 200 && resp.data) {
+                    const $ = cheerio.load(resp.data);
+                    const ids = new Set();
+                    $('a[href]').each((_, el) => {
+                        const href = String($(el).attr('href') || '');
+                        const m = href.match(/\/hearing\/(\d+)/);
+                        if (m) ids.add(Number(m[1]));
+                    });
+                    const uniqueIds = Array.from(ids).slice(0, 100);
+                    if (uniqueIds.length) {
+                        const axiosHtml = axios.create({
+                            headers: {
+                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                                'Accept': 'text/html,application/xhtml+xml',
+                                'Cookie': 'kk-xyz=1',
+                                'Origin': baseUrl,
+                                'Referer': baseUrl
+                            },
+                            timeout: 20000,
+                            validateStatus: () => true
+                        });
+                        const out = [];
+                        let cursor = 0;
+                        const maxConcurrent = 6;
+                        const workers = new Array(Math.min(maxConcurrent, uniqueIds.length)).fill(0).map(async () => {
+                            while (cursor < uniqueIds.length) {
+                                const idx = cursor++;
+                                const hid = uniqueIds[idx];
+                                try {
+                                    const url = `${baseUrl}/hearing/${hid}`;
+                                    const r2 = await withRetries(() => axiosHtml.get(url), { attempts: 2, baseDelayMs: 400 });
+                                    if (r2.status !== 200 || !r2.data) continue;
+                                    const $p = cheerio.load(r2.data);
+                                    const nextDataEl = $p('script#__NEXT_DATA__');
+                                    if (!nextDataEl.length) continue;
+                                    const json = JSON.parse(nextDataEl.text());
+                                    const meta = extractMetaFromNextJson(json);
+                                    out.push({ id: hid, title: meta.title || `Høring ${hid}`, startDate: meta.startDate || null, deadline: meta.deadline || null, status: meta.status || null });
+                                } catch {}
+                            }
+                        });
+                        await Promise.all(workers);
+                        if (out.length > 0) hearingIndex = out.map(enrichHearingForIndex);
+                    }
+                }
+            } catch {}
+        }
+
         // Backfill missing titles by parsing the hearing page HTML (__NEXT_DATA__) with small concurrency
         let missing = hearingIndex.filter(h => !h.title || !h.title.trim());
         let retryCount = 0;
