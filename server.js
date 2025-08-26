@@ -2232,7 +2232,9 @@ async function fetchHearingRootPage(baseUrl, hearingId, axiosInstance) {
 // Fetch a Next.js comments page and extract responses for that page
 async function fetchCommentsPage(baseUrl, hearingId, pageIndex, axiosInstance) {
     const tryUrls = [
+        `${baseUrl}/hearing/${hearingId}/comments${pageIndex && pageIndex > 1 ? `?page=${pageIndex}` : ''}`,
         `${baseUrl}/hearing/${hearingId}/comments${pageIndex && pageIndex > 1 ? `?Page=${pageIndex}` : ''}`,
+        `${baseUrl}/hearing/${hearingId}/comments${pageIndex && pageIndex > 1 ? `?pageIndex=${pageIndex}` : ''}`,
         `${baseUrl}/hearing/${hearingId}/comments${pageIndex && pageIndex > 1 ? `?PageIndex=${pageIndex}` : ''}`
     ];
     for (const url of tryUrls) {
@@ -2509,7 +2511,22 @@ app.get('/api/hearing/:id', async (req, res) => {
         try {
             viaApi = await fetchCommentsViaApi(apiBaseUrl, hearingId, axiosInstance);
         } catch (_) {
-            // Ignore API errors and rely on HTML scrape results.
+            // Ignore API errors
+        }
+        // If HTML suggested multiple pages but we still have exactly 12 responses, try a last HTML loop pass
+        if (normalizedResponses.length === 12 && (typeof totalPages === 'number' ? totalPages > 1 : true)) {
+            try {
+                let pageIndex = 2;
+                let guard = 0;
+                while (guard < 10) {
+                    const result = await withRetries(() => fetchCommentsPage(baseUrl, hearingId, pageIndex, axiosInstance), { attempts: 2, baseDelayMs: 300 });
+                    const pageItems = Array.isArray(result.responses) ? result.responses : [];
+                    if (!pageItems.length) break;
+                    htmlResponses = htmlResponses.concat(pageItems);
+                    pageIndex += 1;
+                    guard += 1;
+                }
+            } catch {}
         }
 
         // Merge results, giving preference to ones with more text, then normalize.
