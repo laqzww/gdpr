@@ -1237,12 +1237,24 @@ async function warmHearingIndex() {
     try {
         const baseApi = 'https://blivhoert.kk.dk/api/hearing';
         const baseUrl = 'https://blivhoert.kk.dk';
+        const axiosInstance = axios.create({
+            headers: {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
+                'Accept': 'application/json',
+                'Accept-Language': 'da-DK,da;q=0.9,en;q=0.8',
+                'Referer': baseUrl,
+                'Cookie': 'kk-xyz=1'
+            },
+            timeout: 30000,
+            validateStatus: () => true
+        });
+
         let page = 1;
         const pageSize = 50;
         const collected = [];
         for (;;) {
             const url = `${baseApi}?PageIndex=${page}&PageSize=${pageSize}`;
-            const r = await axios.get(url, { validateStatus: () => true });
+            const r = await withRetries(() => axiosInstance.get(url), { attempts: 3, baseDelayMs: 500 });
             if (r.status !== 200 || !r.data) break;
             const data = r.data;
             const items = Array.isArray(data?.data) ? data.data : [];
@@ -1289,7 +1301,7 @@ async function warmHearingIndex() {
                 console.log(`Retrying to fetch titles for ${missing.length} hearings (attempt ${retryCount + 1})`);
                 await sleep(1000 * retryCount); // Progressive backoff
             }
-            const axiosInstance = axios.create({
+            const axiosInstance2 = axios.create({
                 headers: {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                     'Accept': 'text/html,application/xhtml+xml',
@@ -1302,7 +1314,7 @@ async function warmHearingIndex() {
             async function fetchMetaFromHearingHtml(hearingId) {
                 try {
                     const url = `${baseUrl}/hearing/${hearingId}`;
-                    const resp = await withRetries(() => axiosInstance.get(url, { validateStatus: () => true }), { attempts: 2, baseDelayMs: 400 });
+                    const resp = await withRetries(() => axiosInstance2.get(url, { validateStatus: () => true }), { attempts: 2, baseDelayMs: 400 });
                     if (resp.status !== 200 || !resp.data) return {};
                     const $ = cheerio.load(resp.data);
                     const nextDataEl = $('script#__NEXT_DATA__');
