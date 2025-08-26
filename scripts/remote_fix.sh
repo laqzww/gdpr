@@ -117,14 +117,34 @@ async function fetchData() {
     const stmt = db.prepare('INSERT OR REPLACE INTO hearings(id, title, start_date, deadline, status, updated_at) VALUES (?, ?, ?, ?, ?, ?)');
     
     try {
-        const response = await axios.get('https://blivhoert.kk.dk/api/hearing?PageIndex=1&PageSize=20');
-        const hearings = response.data?.data || [];
+        console.log('[INIT] Starting to fetch ALL hearings...');
+        let page = 1;
+        let totalFetched = 0;
+        const pageSize = 100;
         
-        console.log('[INIT] Fetched', hearings.length, 'hearings');
-        
-        for (const h of hearings) {
-            stmt.run(h.id, h.title, h.startDate, h.deadline, h.status, Date.now());
+        while (true) {
+            const url = \`https://blivhoert.kk.dk/api/hearing?PageIndex=\${page}&PageSize=\${pageSize}\`;
+            const response = await axios.get(url, { validateStatus: () => true });
+            
+            if (response.status !== 200 || !response.data) break;
+            
+            const hearings = response.data?.data || [];
+            if (hearings.length === 0) break;
+            
+            console.log(\`[INIT] Page \${page}: Fetched \${hearings.length} hearings\`);
+            
+            for (const h of hearings) {
+                stmt.run(h.id, h.title, h.startDate, h.deadline, h.status, Date.now());
+                totalFetched++;
+            }
+            
+            page++;
+            if (page % 10 === 0) {
+                await new Promise(resolve => setTimeout(resolve, 1000)); // Rate limit
+            }
         }
+        
+        console.log(\`[INIT] Fetched total of \${totalFetched} hearings from \${page - 1} pages\`);
         
         const count = db.prepare('SELECT COUNT(*) as count FROM hearings').get();
         console.log('[INIT] Total hearings stored:', count.count);

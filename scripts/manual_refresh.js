@@ -38,23 +38,54 @@ async function manualRefresh() {
             const count = sqliteDb.prepare('SELECT COUNT(*) as count FROM hearings').get();
             console.log('[MANUAL] Hearings in database:', count.count);
             
-            // Try to fetch and insert some hearings directly
-            console.log('[MANUAL] Fetching hearings from API...');
-            const apiResp = await axios.get('https://blivhoert.kk.dk/api/hearing?PageIndex=1&PageSize=10');
-            const hearings = apiResp.data?.data || [];
-            console.log(`[MANUAL] Found ${hearings.length} hearings from API`);
+            // Try to fetch and insert ALL hearings
+            console.log('[MANUAL] Fetching ALL hearings from API...');
+            let page = 1;
+            let totalFetched = 0;
+            const pageSize = 100;
+            const stmt = sqliteDb.prepare(`
+                INSERT OR REPLACE INTO hearings(id, title, start_date, deadline, status, updated_at) 
+                VALUES (?,?,?,?,?,?)
+            `);
             
-            for (const h of hearings.slice(0, 5)) {
+            while (page <= 50) { // Safety limit for manual run
                 try {
-                    console.log(`[MANUAL] Inserting hearing ${h.id}: ${h.title}`);
-                    sqliteDb.prepare(`
-                        INSERT OR REPLACE INTO hearings(id, title, start_date, deadline, status, updated_at) 
-                        VALUES (?,?,?,?,?,?)
-                    `).run(h.id, h.title, h.startDate, h.deadline, h.status, Date.now());
+                    const url = `https://blivhoert.kk.dk/api/hearing?PageIndex=${page}&PageSize=${pageSize}`;
+                    const apiResp = await axios.get(url, { validateStatus: () => true });
+                    
+                    if (apiResp.status !== 200 || !apiResp.data) {
+                        console.log(`[MANUAL] No more pages at page ${page}`);
+                        break;
+                    }
+                    
+                    const hearings = apiResp.data?.data || [];
+                    if (hearings.length === 0) {
+                        console.log(`[MANUAL] No more hearings at page ${page}`);
+                        break;
+                    }
+                    
+                    console.log(`[MANUAL] Page ${page}: Found ${hearings.length} hearings`);
+                    
+                    for (const h of hearings) {
+                        try {
+                            stmt.run(h.id, h.title, h.startDate, h.deadline, h.status, Date.now());
+                            totalFetched++;
+                        } catch (e) {
+                            console.error(`[MANUAL] Failed to insert hearing ${h.id}:`, e.message);
+                        }
+                    }
+                    
+                    page++;
+                    if (page % 10 === 0) {
+                        await new Promise(resolve => setTimeout(resolve, 500)); // Rate limit
+                    }
                 } catch (e) {
-                    console.error(`[MANUAL] Failed to insert hearing ${h.id}:`, e.message);
+                    console.error(`[MANUAL] Error on page ${page}:`, e.message);
+                    break;
                 }
             }
+            
+            console.log(`[MANUAL] Fetched and stored ${totalFetched} hearings total`);
             
             // Check count again
             const newCount = sqliteDb.prepare('SELECT COUNT(*) as count FROM hearings').get();
