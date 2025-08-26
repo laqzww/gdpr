@@ -700,7 +700,16 @@
             try {
                 const container = document.getElementById('suggestions');
                 if (!container) return;
-                const toFetch = (items || []).filter(h => !h || !h.title || !String(h.title).trim());
+                const toFetch = (items || []).filter(h => {
+                    try {
+                        if (!h || !h.title || !String(h.title).trim()) return true;
+                        const t = String(h.title).trim();
+                        const looksNumericOnly = /^\d+$/.test(t);
+                        const looksCase = /^(sag|sagsnr|sagsnummer|case)[:#\s\-]*\d+/i.test(t);
+                        const looksGeneric = /^Høring\s+\d+$/i.test(t) || /^Horing\s+\d+$/i.test(t);
+                        return looksNumericOnly || looksCase || looksGeneric;
+                    } catch { return false; }
+                });
                 if (!toFetch.length) return;
                 // Limit concurrency to avoid overfetching
                 let cursor = 0;
@@ -715,8 +724,12 @@
                             const title = j && j.hearing && j.hearing.title;
                             if (title && String(title).trim()) {
                                 const el = container.querySelector(`.suggestion-item[data-id="${item.id}"] .suggestion-title`);
-                                if (el && el.textContent && el.textContent.startsWith('Høring ')) {
-                                    el.textContent = title;
+                                if (el) {
+                                    const current = String(el.textContent || '').trim();
+                                    const looksLikeCase = /^(sag|sagsnr|sagsnummer|case)[:#\s\-]*\d+/i.test(current) || /^\d+$/.test(current);
+                                    if (current !== title || looksLikeCase || current.startsWith('Høring ')) {
+                                        el.textContent = title;
+                                    }
                                 }
                             }
                         } catch {}

@@ -986,6 +986,8 @@
             
             const hearingId = getHearingIdFromUrl();
             if (hearingId) {
+                // Fetch meta immediately to set the correct title/header while DB data loads
+                try { await fetchMetaFast(hearingId); } catch {}
                 fetchHearingDataById(hearingId);
             } else {
                 showError('Intet hørings-ID angivet');
