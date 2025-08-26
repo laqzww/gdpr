@@ -690,8 +690,41 @@
             `;}).join('');
             
             suggestionsDiv.style.display = 'block';
+            // After rendering, hydrate missing titles via fast meta calls
+            try { hydrateSuggestionTitles(sorted); } catch {}
             
             // Disabled background preload to reduce API calls on low-tier hosting
+        }
+
+        async function hydrateSuggestionTitles(items) {
+            try {
+                const container = document.getElementById('suggestions');
+                if (!container) return;
+                const toFetch = (items || []).filter(h => !h || !h.title || !String(h.title).trim());
+                if (!toFetch.length) return;
+                // Limit concurrency to avoid overfetching
+                let cursor = 0;
+                const maxConcurrent = 4;
+                const run = async () => {
+                    while (cursor < toFetch.length) {
+                        const idx = cursor++;
+                        const item = toFetch[idx];
+                        try {
+                            const r = await fetch(`/api/hearing/${encodeURIComponent(item.id)}/meta?nocache=1`);
+                            const j = await r.json().catch(()=>({}));
+                            const title = j && j.hearing && j.hearing.title;
+                            if (title && String(title).trim()) {
+                                const el = container.querySelector(`.suggestion-item[data-id="${item.id}"] .suggestion-title`);
+                                if (el && el.textContent && el.textContent.startsWith('Høring ')) {
+                                    el.textContent = title;
+                                }
+                            }
+                        } catch {}
+                    }
+                };
+                const workers = new Array(Math.min(maxConcurrent, toFetch.length)).fill(0).map(run);
+                await Promise.all(workers);
+            } catch {}
         }
         
         function hideSuggestions() {

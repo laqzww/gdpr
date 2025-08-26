@@ -1148,6 +1148,7 @@
             }
             if (headerDeadline) headerDeadline.textContent = deadlineText;
             if (headerLink) headerLink.href = hearing.url || '#';
+            try { document.title = hearing.title ? `${hearing.title} · Bliv Hørt AI` : 'Bliv Hørt AI'; } catch {}
             
             // Show wizard navigation
             document.getElementById('wizardNav').style.display = 'block';
