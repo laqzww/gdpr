@@ -4198,6 +4198,48 @@ app.post('/api/client-log', express.json({ limit: '256kb' }), (req, res) => {
 app.get('/health', (req, res) => res.status(200).json({ status: 'ok' }));
 app.get('/healthz', (req, res) => res.status(200).json({ status: 'ok' }));
 
+// Test SQLite installation
+app.get('/api/test-sqlite', (req, res) => {
+    try {
+        let Database;
+        try {
+            Database = require('better-sqlite3');
+        } catch (e) {
+            return res.json({ 
+                betterSqlite3: false, 
+                error: e.message,
+                stack: e.stack 
+            });
+        }
+        
+        const testPath = path.join(process.cwd(), 'test.db');
+        try {
+            const testDb = new Database(testPath);
+            testDb.exec('CREATE TABLE IF NOT EXISTS test (id INTEGER)');
+            const result = testDb.prepare('SELECT 1 as test').get();
+            testDb.close();
+            fs.unlinkSync(testPath);
+            
+            return res.json({ 
+                betterSqlite3: true, 
+                testSuccess: true,
+                result,
+                testPath
+            });
+        } catch (e) {
+            return res.json({ 
+                betterSqlite3: true, 
+                testSuccess: false,
+                error: e.message,
+                stack: e.stack,
+                testPath
+            });
+        }
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 // Force database re-initialization endpoint
 app.post('/api/db-reinit', (req, res) => {
     try {
