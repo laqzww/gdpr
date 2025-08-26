@@ -4201,15 +4201,22 @@ app.get('/healthz', (req, res) => res.status(200).json({ status: 'ok' }));
 // Database status endpoint for debugging
 app.get('/api/db-status', (req, res) => {
     try {
-        const { DB_PATH } = require('./db/sqlite');
+        const isRender = process.env.RENDER === 'true';
+        const dbPath = process.env.DB_PATH || (isRender 
+            ? '/opt/render/project/src/fetcher/data/app.sqlite' 
+            : path.join(__dirname, 'data', 'app.sqlite'));
         const status = {
-            dbPath: DB_PATH,
+            dbPath: dbPath,
+            isRender: isRender,
             dbExists: false,
             hearingCount: 0,
             responseCount: 0,
             materialCount: 0,
             lastHearingUpdate: null,
-            error: null
+            error: null,
+            fileExists: fs.existsSync(dbPath),
+            dirExists: fs.existsSync(path.dirname(dbPath)),
+            workingDir: process.cwd()
         };
         
         if (sqliteDb && sqliteDb.prepare) {
