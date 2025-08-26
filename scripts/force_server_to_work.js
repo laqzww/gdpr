@@ -159,33 +159,45 @@ const testProcess = spawn('node', ['test_direct_db.js'], {
 testProcess.unref();
 
 console.log('[FORCE] Waiting for test server to start...');
-await new Promise(resolve => setTimeout(resolve, 3000));
+setTimeout(() => {
+    // 5. Test it
+    console.log('\n[FORCE] Step 5: Testing direct database access...');
+    try {
+        const result = execSync('curl -s http://localhost:5000/api/direct-db-test', { encoding: 'utf8' });
+        console.log('[FORCE] Direct DB test result:', result);
+    } catch (e) {
+        console.error('[FORCE] Direct DB test failed:', e.message);
+    }
+    
+    // Continue with final instructions
+    printFinalInstructions();
+}, 3000);
 
-// 5. Test it
-console.log('\n[FORCE] Step 5: Testing direct database access...');
-try {
-    const result = execSync('curl -s http://localhost:5000/api/direct-db-test', { encoding: 'utf8' });
-    console.log('[FORCE] Direct DB test result:', result);
-} catch (e) {
-    console.error('[FORCE] Direct DB test failed:', e.message);
+function printFinalInstructions() {
+    // 6. Final instructions
+    console.log('\n[FORCE] ========================================');
+    console.log('[FORCE] SOLUTION:');
+    console.log('[FORCE] ========================================');
+    console.log('[FORCE] The database EXISTS and has data!');
+    console.log(`[FORCE] Database location: ${workingDbPath}`);
+    console.log(`[FORCE] Database contains: ${maxHearings} hearings`);
+    console.log('[FORCE]');
+    console.log('[FORCE] The problem is that db/sqlite.js fails to load better-sqlite3');
+    console.log('[FORCE] or the server is not using the correct DB_PATH.');
+    console.log('[FORCE]');
+    console.log('[FORCE] IMMEDIATE FIX:');
+    console.log('[FORCE] 1. Restart the Render service to force it to reload');
+    console.log('[FORCE] 2. Or manually set DB_PATH in Render environment variables to:');
+    console.log(`[FORCE]    DB_PATH=${workingDbPath}`);
+    console.log('[FORCE]');
+    console.log('[FORCE] The test endpoint proves the database works:');
+    console.log('[FORCE]   curl http://localhost:5000/api/direct-db-test');
+    console.log('[FORCE] ========================================');
+    
+    // Kill any hanging processes
+    try {
+        execSync('pkill -f test_direct_db.js', { stdio: 'ignore' });
+    } catch (e) {
+        // Ignore
+    }
 }
-
-// 6. Final instructions
-console.log('\n[FORCE] ========================================');
-console.log('[FORCE] SOLUTION:');
-console.log('[FORCE] ========================================');
-console.log('[FORCE] The database EXISTS and has data!');
-console.log(`[FORCE] Database location: ${workingDbPath}`);
-console.log(`[FORCE] Database contains: ${maxHearings} hearings`);
-console.log('[FORCE]');
-console.log('[FORCE] The problem is that db/sqlite.js fails to load better-sqlite3');
-console.log('[FORCE] or the server is not using the correct DB_PATH.');
-console.log('[FORCE]');
-console.log('[FORCE] IMMEDIATE FIX:');
-console.log('[FORCE] 1. Restart the Render service to force it to reload');
-console.log('[FORCE] 2. Or manually set DB_PATH in Render environment variables to:');
-console.log(`[FORCE]    DB_PATH=${workingDbPath}`);
-console.log('[FORCE]');
-console.log('[FORCE] The test endpoint proves the database works:');
-console.log('[FORCE]   curl http://localhost:5000/api/direct-db-test');
-console.log('[FORCE] ========================================');
