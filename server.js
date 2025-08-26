@@ -1293,6 +1293,95 @@ async function warmHearingIndex() {
         }
         hearingIndex = collected.map(enrichHearingForIndex);
 
+        // Fallback: If API failed or returned nothing, use sitemap + HTML (__NEXT_DATA__) to build index
+        if (!Array.isArray(hearingIndex) || hearingIndex.length === 0) {
+            try {
+                const sm = axios.create({
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
+                        'Accept': 'application/xml,text/xml,application/xhtml+xml,text/html,*/*',
+                        'Accept-Language': 'da-DK,da;q=0.9,en;q=0.8',
+                        'Referer': baseUrl
+                    },
+                    timeout: 20000,
+                    validateStatus: () => true
+                });
+                const candidates = [
+                    `${baseUrl}/sitemap.xml`,
+                    `${baseUrl}/sitemap_index.xml`,
+                    `${baseUrl}/sitemap-hearing.xml`,
+                    `${baseUrl}/sitemap-hearings.xml`
+                ];
+                const urls = new Set();
+                for (const u of candidates) {
+                    try {
+                        const resp = await withRetries(() => sm.get(u), { attempts: 2, baseDelayMs: 400 });
+                        if (resp.status !== 200 || !resp.data) continue;
+                        const $ = cheerio.load(resp.data, { xmlMode: true });
+                        $('loc').each((_, el) => {
+                            const t = String($(el).text() || '').trim();
+                            if (t) urls.add(t);
+                        });
+                        $('url > loc').each((_, el) => {
+                            const t = String($(el).text() || '').trim();
+                            if (t) urls.add(t);
+                        });
+                        $('sitemap > loc').each((_, el) => {
+                            const t = String($(el).text() || '').trim();
+                            if (t) urls.add(t);
+                        });
+                    } catch {}
+                }
+                const hearingIdFromUrl = (s) => {
+                    const m = String(s || '').match(/\/hearing\/(\d+)/);
+                    return m ? Number(m[1]) : null;
+                };
+                const ids = Array.from(urls)
+                    .map(hearingIdFromUrl)
+                    .filter((x) => Number.isFinite(x));
+                const uniqueIds = Array.from(new Set(ids)).slice(0, 300);
+
+                // Fetch meta via HTML for these IDs
+                const axiosHtml = axios.create({
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                        'Accept': 'text/html,application/xhtml+xml',
+                        'Cookie': 'kk-xyz=1',
+                        'Origin': baseUrl,
+                        'Referer': baseUrl
+                    },
+                    timeout: 20000,
+                    validateStatus: () => true
+                });
+                const out = [];
+                let cursor = 0;
+                const maxConcurrent = 6;
+                const workers = new Array(Math.min(maxConcurrent, uniqueIds.length)).fill(0).map(async () => {
+                    while (cursor < uniqueIds.length) {
+                        const idx = cursor++;
+                        const hid = uniqueIds[idx];
+                        try {
+                            const url = `${baseUrl}/hearing/${hid}`;
+                            const resp = await withRetries(() => axiosHtml.get(url), { attempts: 2, baseDelayMs: 400 });
+                            if (resp.status !== 200 || !resp.data) continue;
+                            const $ = cheerio.load(resp.data);
+                            const nextDataEl = $('script#__NEXT_DATA__');
+                            if (!nextDataEl.length) continue;
+                            const json = JSON.parse(nextDataEl.text());
+                            // Reuse existing extractor to build meta
+                            const meta = extractMetaFromNextJson(json);
+                            const title = meta.title || `Høring ${hid}`;
+                            out.push({ id: hid, title, startDate: meta.startDate || null, deadline: meta.deadline || null, status: meta.status || null });
+                        } catch {}
+                    }
+                });
+                await Promise.all(workers);
+                if (out.length > 0) {
+                    hearingIndex = out.map(enrichHearingForIndex);
+                }
+            } catch {}
+        }
+
         // Backfill missing titles by parsing the hearing page HTML (__NEXT_DATA__) with small concurrency
         let missing = hearingIndex.filter(h => !h.title || !h.title.trim());
         let retryCount = 0;
