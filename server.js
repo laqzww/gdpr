@@ -268,10 +268,13 @@ try { fs.mkdirSync(path.join(__dirname, 'data'), { recursive: true }); } catch {
 console.log('[Server] Starting SQLite initialization...');
 console.log('[Server] Current directory:', __dirname);
 console.log('[Server] Data directory:', path.join(__dirname, 'data'));
-try { 
-    initDb(); 
+try {
+    initDb();
+    // Prime a trivial statement to ensure better-sqlite3 loads and DB file is touchable
+    const sqlite = require('./db/sqlite');
+    try { if (sqlite && sqlite.db && sqlite.db.prepare) sqlite.db.prepare('SELECT 1').get(); } catch {}
     console.log('[Server] SQLite initialized successfully');
-} catch (e) { 
+} catch (e) {
     console.error('[Server] SQLite init failed:', e.message);
     console.error('[Server] Full error:', e);
 }
