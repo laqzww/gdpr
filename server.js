@@ -1240,10 +1240,12 @@ async function warmHearingIndex() {
         const axiosInstance = axios.create({
             headers: {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
-                'Accept': 'application/json',
+                'Accept': 'application/vnd.api+json, application/json',
                 'Accept-Language': 'da-DK,da;q=0.9,en;q=0.8',
                 'Referer': baseUrl,
-                'Cookie': 'kk-xyz=1'
+                'Origin': baseUrl,
+                'Cookie': 'kk-xyz=1',
+                'X-Requested-With': 'XMLHttpRequest'
             },
             timeout: 30000,
             validateStatus: () => true
@@ -1305,7 +1307,9 @@ async function warmHearingIndex() {
                 headers: {
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                     'Accept': 'text/html,application/xhtml+xml',
-                    'Cookie': 'kk-xyz=1'
+                    'Cookie': 'kk-xyz=1',
+                    'Origin': baseUrl,
+                    'Referer': baseUrl
                 },
                 timeout: 20000,
                 validateStatus: () => true
