@@ -407,6 +407,7 @@ function listUploads(sessionId, hearingId) {
 
 module.exports = {
     db,
+    DB_PATH,
     init,
     upsertHearing,
     replaceResponses,
