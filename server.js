@@ -1519,6 +1519,42 @@ app.get('/api/search', async (req, res) => {
     res.json({ success: true, suggestions: out });
 });
 
+// Public hearing index: returns current in-memory index; builds it if missing
+app.get('/api/hearing-index', async (req, res) => {
+    try {
+        const statusLike = String(req.query.status || '').trim().toLowerCase();
+
+        // If index is empty, first try to hydrate from SQLite
+        if (!Array.isArray(hearingIndex) || hearingIndex.length === 0) {
+            try {
+                if (sqliteDb && sqliteDb.prepare) {
+                    let rows;
+                    if (statusLike) {
+                        rows = sqliteDb.prepare(`SELECT id,title,start_date as startDate,deadline,status FROM hearings WHERE archived IS NOT 1 AND LOWER(status) LIKE '%' || ? || '%'`).all(statusLike);
+                    } else {
+                        rows = sqliteDb.prepare(`SELECT id,title,start_date as startDate,deadline,status FROM hearings WHERE archived IS NOT 1`).all();
+                    }
+                    hearingIndex = (rows || []).map(enrichHearingForIndex);
+                }
+            } catch (_) {}
+        }
+
+        // If still empty, warm from remote API
+        if (!Array.isArray(hearingIndex) || hearingIndex.length === 0) {
+            try { await warmHearingIndex(); } catch (_) {}
+        }
+
+        let items = Array.isArray(hearingIndex) ? hearingIndex : [];
+        if (statusLike) {
+            items = items.filter(h => String(h.status || '').toLowerCase().includes(statusLike));
+        }
+        const hearings = items.map(h => ({ id: h.id, title: h.title, startDate: h.startDate, deadline: h.deadline, status: h.status }));
+        return res.json({ success: true, hearings, count: hearings.length });
+    } catch (e) {
+        return res.status(500).json({ success: false, message: 'Kunne ikke hente hørelsesindeks', error: e.message });
+    }
+});
+
 // Full hearings index with optional filtering and ordering
 app.get('/api/hearings', (req, res) => {
     try {
@@ -4322,9 +4358,11 @@ app.post('/api/prefetch/:id', async (req, res) => {
         prefetchInFlight.add(hearingId);
         let payload = null;
         if (apiOnly) {
-            // Use API-only routes to avoid HTML scraping for cron/prefetch
+            // Use API-only routes to avoid HTML scraping for cron/prefetch.
+            // IMPORTANT: The DB-only aggregate endpoint may 404 if not yet persisted.
+            // Prefer the dedicated meta endpoint which fetches from source.
             const [metaResp, resps, mats] = await Promise.all([
-                axios.get(`${base}/api/hearing/${hearingId}?persist=1`, { validateStatus: () => true, timeout: INTERNAL_API_TIMEOUT_MS }),
+                axios.get(`${base}/api/hearing/${hearingId}/meta`, { validateStatus: () => true, timeout: INTERNAL_API_TIMEOUT_MS }),
                 axios.get(`${base}/api/hearing/${hearingId}/responses?nocache=1`, { validateStatus: () => true, timeout: INTERNAL_API_TIMEOUT_MS }),
                 axios.get(`${base}/api/hearing/${hearingId}/materials?nocache=1`, { validateStatus: () => true, timeout: INTERNAL_API_TIMEOUT_MS })
             ]);
@@ -4335,6 +4373,14 @@ app.post('/api/prefetch/:id', async (req, res) => {
                     responses: Array.isArray(resps?.data?.responses) ? resps.data.responses : [],
                     materials: Array.isArray(mats?.data?.materials) ? mats.data.materials : [],
                     totalPages: metaResp.data.totalPages || undefined
+                };
+            } else {
+                // Fallback minimal payload allows persisting responses/materials even if meta fails
+                payload = {
+                    success: true,
+                    hearing: { id: Number(hearingId), title: `Høring ${hearingId}`, startDate: null, deadline: null, status: 'ukendt' },
+                    responses: Array.isArray(resps?.data?.responses) ? resps.data.responses : [],
+                    materials: Array.isArray(mats?.data?.materials) ? mats.data.materials : []
                 };
             }
         } else {
@@ -4354,6 +4400,26 @@ app.post('/api/prefetch/:id', async (req, res) => {
             }
         }
         if (!payload) { prefetchInFlight.delete(hearingId); return res.status(500).json({ success: false, message: 'Kunne ikke hente data' }); }
+
+        // Fallback: If materials are missing, try a targeted hydration to extract materials
+        try {
+            const needsMaterials = !Array.isArray(payload.materials) || payload.materials.length === 0;
+            if (needsMaterials) {
+                const hyd = await hydrateHearingDirect(hearingId);
+                if (hyd && hyd.success) {
+                    // Prefer responses with more items
+                    if (Array.isArray(hyd.materials) && hyd.materials.length > 0) {
+                        payload.materials = hyd.materials;
+                    }
+                    if (Array.isArray(hyd.responses) && ((payload.responses||[]).length < hyd.responses.length)) {
+                        payload.responses = hyd.responses;
+                    }
+                    if (payload.hearing && typeof payload.hearing === 'object') {
+                        // If hydrate wrote improved meta to DB, keep current payload.hearing as-is
+                    }
+                }
+            }
+        } catch {}
         writePersistedHearing(hearingId, payload);
         // Also persist to SQLite for stable reads
         try {
