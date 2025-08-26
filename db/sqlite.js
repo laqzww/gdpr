@@ -73,9 +73,16 @@ function attemptRebuildOnce(hintError) {
 const isRender = process.env.RENDER === 'true';
 // On Render, the working directory is /opt/render/project/src
 // But the disk is mounted at /opt/render/project/src/fetcher/data
-const DB_PATH = process.env.DB_PATH || (isRender 
+// Force absolute path on Render
+const defaultPath = isRender 
     ? '/opt/render/project/src/fetcher/data/app.sqlite'
-    : path.join(__dirname, '..', 'data', 'app.sqlite'));
+    : path.join(__dirname, '..', 'data', 'app.sqlite');
+
+// If DB_PATH is set but relative, make it absolute on Render
+let DB_PATH = process.env.DB_PATH || defaultPath;
+if (isRender && DB_PATH && !path.isAbsolute(DB_PATH)) {
+    DB_PATH = path.join('/opt/render/project/src', DB_PATH);
+}
 
 console.log('[SQLite] Environment:', {
     isRender,
