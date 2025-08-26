@@ -4201,8 +4201,9 @@ app.get('/healthz', (req, res) => res.status(200).json({ status: 'ok' }));
 // Database status endpoint for debugging
 app.get('/api/db-status', (req, res) => {
     try {
+        const { DB_PATH } = require('./db/sqlite');
         const status = {
-            dbPath: process.env.DB_PATH || 'default',
+            dbPath: DB_PATH,
             dbExists: false,
             hearingCount: 0,
             responseCount: 0,

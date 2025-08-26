@@ -69,7 +69,11 @@ function attemptRebuildOnce(hintError) {
     }
 })();
 
-const DB_PATH = process.env.DB_PATH || path.join(__dirname, '..', 'data', 'app.sqlite');
+// Detect if running on Render by checking for RENDER environment variable
+const isRender = process.env.RENDER === 'true';
+const DB_PATH = process.env.DB_PATH || (isRender 
+    ? '/opt/render/project/src/fetcher/data/app.sqlite' 
+    : path.join(__dirname, '..', 'data', 'app.sqlite'));
 
 let db = null;
 
