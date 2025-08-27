@@ -700,16 +700,8 @@
             try {
                 const container = document.getElementById('suggestions');
                 if (!container) return;
-                const toFetch = (items || []).filter(h => {
-                    try {
-                        if (!h || !h.title || !String(h.title).trim()) return true;
-                        const t = String(h.title).trim();
-                        const looksNumericOnly = /^\d+$/.test(t);
-                        const looksCase = /^(sag|sagsnr|sagsnummer|case)[:#\s\-]*\d+/i.test(t);
-                        const looksGeneric = /^Høring\s+\d+$/i.test(t) || /^Horing\s+\d+$/i.test(t);
-                        return looksNumericOnly || looksCase || looksGeneric;
-                    } catch { return false; }
-                });
+                // Do not guess; hydrate titles for all currently rendered items
+                const toFetch = Array.isArray(items) ? items.slice() : [];
                 if (!toFetch.length) return;
                 // Limit concurrency to avoid overfetching
                 let cursor = 0;
@@ -726,8 +718,7 @@
                                 const el = container.querySelector(`.suggestion-item[data-id="${item.id}"] .suggestion-title`);
                                 if (el) {
                                     const current = String(el.textContent || '').trim();
-                                    const looksLikeCase = /^(sag|sagsnr|sagsnummer|case)[:#\s\-]*\d+/i.test(current) || /^\d+$/.test(current);
-                                    if (current !== title || looksLikeCase || current.startsWith('Høring ')) {
+                                    if (current !== title) {
                                         el.textContent = title;
                                     }
                                     // Also correct the cached search index so future renders use the real title
