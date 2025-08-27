@@ -956,8 +956,10 @@
                 const r = await fetchWithTimeout(`/api/hearing/${encodeURIComponent(hearingId)}/meta?t=${t}&nocache=1`, { cache: 'no-cache', headers: { 'Cache-Control': 'no-cache' } }, 6000);
                 const j = await r.json().catch(()=>({}));
                 if (j && j.success && j.hearing) {
-                    lastFetched.hearing = j.hearing;
-                    displayHearingInfo(j.hearing);
+                    // Preserve meta title as authoritative to avoid later DB overwrites
+                    if (!lastFetched.hearing) lastFetched.hearing = {};
+                    lastFetched.hearing = { ...(lastFetched.hearing||{}), ...j.hearing };
+                    displayHearingInfo(lastFetched.hearing);
                 }
             } catch {}
         }
@@ -1014,7 +1016,12 @@
                 const r = await fetch(`/api/hearing/${encodeURIComponent(hearingId)}?t=${Date.now()}&db=1`);
                 const j = await r.json().catch(()=>({}));
                 if (j && j.success && (j.found || j.hearing)) {
+                    // Merge DB payload but keep any previously fetched meta title
+                    const prevTitle = lastFetched && lastFetched.hearing && lastFetched.hearing.title;
                     lastFetched = { hearing: j.hearing, responses: j.responses || [], materials: [], uploads: [] };
+                    if (prevTitle && (!lastFetched.hearing.title || /^\d+$/.test(String(lastFetched.hearing.title)) || /^Hør(in)?g\s+\d+/i.test(String(lastFetched.hearing.title)))) {
+                        lastFetched.hearing.title = prevTitle;
+                    }
                     try { await applySavedEdits(); } catch {}
                     displayHearingInfo(lastFetched.hearing);
                     displayResponses(lastFetched.responses);

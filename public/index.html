@@ -730,6 +730,18 @@
                                     if (current !== title || looksLikeCase || current.startsWith('Høring ')) {
                                         el.textContent = title;
                                     }
+                                    // Also correct the cached search index so future renders use the real title
+                                    try {
+                                        if (Array.isArray(cachedSearchIndex)) {
+                                            const idx = cachedSearchIndex.findIndex(h => String(h && h.id) === String(item.id));
+                                            if (idx >= 0) {
+                                                cachedSearchIndex[idx] = { ...cachedSearchIndex[idx], title };
+                                                if (window.dataCache && typeof window.dataCache.setSearchIndex === 'function') {
+                                                    window.dataCache.setSearchIndex(cachedSearchIndex).catch(()=>{});
+                                                }
+                                            }
+                                        }
+                                    } catch {}
                                 }
                             }
                         } catch {}
@@ -799,7 +811,7 @@
                         </svg>
                         Titel
                     </span>
-                    <span class="detail-value">${hearing.title}</span>
+                    <span class="detail-value" id="modalTitleValue">${hearing.title}</span>
                 </div>
                 <div class="detail-row">
                     <span class="detail-label">
@@ -827,6 +839,25 @@
             
             document.getElementById('hearingModal').classList.add('show');
             document.body.style.overflow = 'hidden';
+
+            // Hydrate modal title from meta to override any case-number placeholders
+            try { hydrateModalTitle(String(hearing.id || selectedHearingForModal?.id || '')); } catch {}
+        }
+
+        async function hydrateModalTitle(hearingId) {
+            try {
+                if (!hearingId || !/^\d+$/.test(String(hearingId))) return;
+                const r = await fetch(`/api/hearing/${encodeURIComponent(hearingId)}/meta?nocache=1`);
+                const j = await r.json().catch(()=>({}));
+                const title = j && j.hearing && j.hearing.title;
+                if (title && String(title).trim()) {
+                    const el = document.getElementById('modalTitleValue');
+                    if (el) el.textContent = title;
+                    if (selectedHearingForModal && String(selectedHearingForModal.id) === String(hearingId)) {
+                        selectedHearingForModal.title = title;
+                    }
+                }
+            } catch {}
         }
         
         function closeHearingModal() {
