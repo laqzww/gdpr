@@ -1303,6 +1303,13 @@ async function warmHearingIndex() {
             page += 1;
         }
         hearingIndex = collected.map(enrichHearingForIndex);
+        try {
+            if (sqliteDb && sqliteDb.prepare) {
+                for (const h of hearingIndex) {
+                    try { upsertHearing({ id: h.id, title: h.title || `Høring ${h.id}`, startDate: h.startDate || null, deadline: h.deadline || null, status: h.status || null }); } catch {}
+                }
+            }
+        } catch {}
 
         // Fallback: If API failed or returned nothing, use sitemap + HTML (__NEXT_DATA__) to build index
         if (!Array.isArray(hearingIndex) || hearingIndex.length === 0) {
@@ -1389,6 +1396,13 @@ async function warmHearingIndex() {
                 await Promise.all(workers);
                 if (out.length > 0) {
                     hearingIndex = out.map(enrichHearingForIndex);
+                    try {
+                        if (sqliteDb && sqliteDb.prepare) {
+                            for (const h of hearingIndex) {
+                                try { upsertHearing({ id: h.id, title: h.title || `Høring ${h.id}`, startDate: h.startDate || null, deadline: h.deadline || null, status: h.status || null }); } catch {}
+                            }
+                        }
+                    } catch {}
                 }
             } catch {}
         }
