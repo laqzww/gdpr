@@ -1795,13 +1795,40 @@ app.get('/api/hearings', (req, res) => {
         const norm = normalizeDanish(raw);
 
         const sqlite = require('./db/sqlite');
-        if (!sqlite || !sqlite.db || !sqlite.db.prepare) {
-            return res.json({ success: true, total: 0, hearings: [] });
+        let results = [];
+        if (sqlite && sqlite.db && sqlite.db.prepare) {
+            try {
+                results = sqlite.db
+                    .prepare(`SELECT id, title, start_date as startDate, deadline, status FROM hearings WHERE archived IS NOT 1`)
+                    .all();
+            } catch (_) { results = []; }
         }
 
-        let results = sqlite.db
-            .prepare(`SELECT id, title, start_date as startDate, deadline, status FROM hearings WHERE archived IS NOT 1`)
-            .all();
+        // Fallback to in-memory index or persisted JSON if DB is empty
+        if (!Array.isArray(results) || results.length === 0) {
+            try {
+                // If global index is empty, try to warm it from persisted JSON
+                if (!Array.isArray(hearingIndex) || hearingIndex.length === 0) {
+                    try {
+                        const dir = path.join(__dirname, 'data', 'hearings');
+                        const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter(f => f.endsWith('.json')) : [];
+                        const items = [];
+                        for (const f of files.slice(0, 2000)) {
+                            try {
+                                const rawFile = fs.readFileSync(path.join(dir, f), 'utf8');
+                                const json = JSON.parse(rawFile);
+                                const h = json && json.hearing;
+                                if (h && Number.isFinite(Number(h.id))) {
+                                    items.push({ id: Number(h.id), title: h.title || `Høring ${h.id}`, startDate: h.startDate || null, deadline: h.deadline || null, status: h.status || null });
+                                }
+                            } catch {}
+                        }
+                        hearingIndex = items.map(enrichHearingForIndex);
+                    } catch {}
+                }
+                results = (Array.isArray(hearingIndex) ? hearingIndex : []).map(h => ({ id: h.id, title: h.title, startDate: h.startDate, deadline: h.deadline, status: h.status }));
+            } catch { results = []; }
+        }
 
         if (norm) {
             const isNumeric = /^\d+$/.test(raw);
@@ -2461,11 +2488,24 @@ app.get('/api/hearing/:id', async (req, res) => {
         if (!/^\d+$/.test(hearingId)) {
             return res.status(400).json({ success: false, message: 'Ugyldigt hørings-ID' });
         }
-        // DB-only read path: no network fetches here
+        // DB-first read path; fallback to persisted JSON snapshot if available
         const fromDb = readAggregate(hearingId);
         if (fromDb && fromDb.hearing) {
             return res.json({ success: true, hearing: fromDb.hearing, totalPages: undefined, totalResponses: (fromDb.responses||[]).length, responses: fromDb.responses });
         }
+        try {
+            const meta = readPersistedHearingWithMeta(hearingId);
+            const persisted = meta?.data;
+            if (persisted && persisted.success && persisted.hearing) {
+                return res.json({
+                    success: true,
+                    hearing: persisted.hearing,
+                    totalPages: persisted.totalPages || undefined,
+                    totalResponses: Array.isArray(persisted.responses) ? persisted.responses.length : 0,
+                    responses: Array.isArray(persisted.responses) ? persisted.responses : []
+                });
+            }
+        } catch {}
         return res.status(404).json({ success: false, message: 'Ikke fundet i databasen' });
 
         // Full HTML scrape for all pages, as it's the most reliable source for attachments.
