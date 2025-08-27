@@ -163,7 +163,7 @@ def _add_comment_safe(doc: Document, runs, comment_text: str):
     try:
         add_comment = getattr(doc, 'add_comment', None)
         if callable(add_comment) and runs:
-            c = add_comment(text='', author="AI Høringsassistent", initials="AI", runs=runs)
+            c = add_comment(text='', author="Bliv Hørt AI", initials="AI", runs=runs)
             c.paragraphs[0].clear()
             for i, line in enumerate(comment_text_norm.split('\n')):
                 if i > 0:
@@ -379,25 +379,37 @@ def build_doc_from_markdown(markdown_text: str, template_file: Path, output_file
     exclude_main_title_from_toc(doc)
     clear_and_replace_toc(doc)
 
+    def _apply_heading_style_by_level(doc: Document, p: Paragraph, level: int):
+        # Prefer explicit localized heading styles rather than relying on python-docx defaults
+        # This improves consistency across localized templates (e.g., Danish 'Overskrift {n}')
+        if level < 1:
+            level = 1
+        candidate_styles = [
+            f'Heading {level}',
+            f'Overskrift {level}',
+            f'Rubrik {level}',
+        ]
+        # Only for level 1, also try generic Title/Rubrik/Titel if present in template
+        if level == 1:
+            candidate_styles.extend(['Title', 'Titel', 'Rubrik'])
+        _try_apply_style(p, doc, candidate_styles)
+
+    heading_pattern = re.compile(r'^\s{0,3}(#{1,6})\s*(.*?)\s*#*\s*$')
+
     for raw_line in sanitized_text.splitlines():
         line = raw_line.rstrip('\n')
         if not line.strip():
             p = doc.add_paragraph()
             _try_apply_style(p, doc, ['Normal', 'Brødtekst', 'Body Text'])
             continue
-        m = re.match(r'^\s*(#{1,6})\s+(.*)', line)
+        m = heading_pattern.match(line)
         if m:
             level = len(m.group(1))
-            p = doc.add_heading(level=level)
+            # Use a plain paragraph and apply style explicitly for better locale compatibility
+            p = doc.add_paragraph()
             set_paragraph_outline_level(p, max(0, level - 1))
             process_line_content(doc, p, m.group(2).strip(), critic_blocks)
-            # Ensure template heading style is applied even if localized
-            _try_apply_style(p, doc, [
-                f'Heading {level}',
-                f'Overskrift {level}',
-                f'Rubrik {level}',
-                f'Titel {level}'
-            ])
+            _apply_heading_style_by_level(doc, p, level)
         else:
             p = doc.add_paragraph()
             process_line_content(doc, p, line.strip(), critic_blocks)
