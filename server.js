@@ -1786,32 +1786,70 @@ app.get('/api/test-outbound', async (req, res) => {
 });
 
 // Full hearings index with optional filtering and ordering
-app.get('/api/hearings', (req, res) => {
+app.get('/api/hearings', async (req, res) => {
     try {
         const { q = '' } = req.query;
         const raw = String(q || '').trim();
         const norm = normalizeDanish(raw);
-        // DB-only dataset: only "Afventer konklusion"
+
         let results = [];
-        try { results = listHearingsByStatusLike('Afventer konklusion'); } catch {}
+        // 1) Try DB if available
+        try {
+            const sqlite = require('./db/sqlite');
+            if (sqlite && sqlite.db && sqlite.db.prepare) {
+                const rows = sqlite.db.prepare(`SELECT id,title,start_date as startDate,deadline,status FROM hearings WHERE archived IS NOT 1`).all();
+                results = Array.isArray(rows) ? rows : [];
+            }
+        } catch {}
+
+        // 2) Fallback to in-memory index if DB empty
+        if (!Array.isArray(results) || results.length === 0) {
+            try {
+                if (Array.isArray(hearingIndex) && hearingIndex.length > 0) {
+                    results = hearingIndex.map(h => ({ id: h.id, title: h.title, startDate: h.startDate, deadline: h.deadline, status: h.status }));
+                }
+            } catch {}
+        }
+
+        // 3) Fallback to persisted JSON files if still empty
+        if (!Array.isArray(results) || results.length === 0) {
+            try {
+                const dir = path.join(PERSIST_DIR, 'hearings');
+                const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter(f => f.endsWith('.json')) : [];
+                const items = [];
+                for (const f of files) {
+                    try {
+                        const j = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
+                        if (j && j.hearing && j.hearing.id != null) {
+                            const h = j.hearing;
+                            items.push({ id: Number(h.id), title: h.title || '', startDate: h.startDate || null, deadline: h.deadline || null, status: h.status || null });
+                        }
+                    } catch {}
+                }
+                if (items.length) results = items;
+            } catch {}
+        }
+
+        // Apply optional query filter
         if (norm) {
             const isNumeric = /^\d+$/.test(raw);
-            results = results.filter(h => {
-                if (isNumeric) {
-                    if (String(h.id).includes(raw)) return true;
-                }
+            results = (results || []).filter(h => {
+                if (!h) return false;
+                if (isNumeric && String(h.id).includes(raw)) return true;
                 const normTitle = normalizeDanish(String(h.title || ''));
-                if (normTitle.includes(norm)) return true;
-                return false;
+                return normTitle.includes(norm) || String(h.id).includes(raw);
             });
         }
+
+        // Sort by earliest deadline, then id
         results.sort((a, b) => {
-            const da = a.deadline ? new Date(a.deadline).getTime() : Infinity;
-            const db = b.deadline ? new Date(b.deadline).getTime() : Infinity;
+            const da = a && a.deadline ? new Date(a.deadline).getTime() : Infinity;
+            const db = b && b.deadline ? new Date(b.deadline).getTime() : Infinity;
             if (da !== db) return da - db;
             return (a.id || 0) - (b.id || 0);
         });
-        const out = results.map(h => ({ id: h.id, title: h.title, startDate: h.startDate, deadline: h.deadline, status: h.status }));
+
+        const out = (results || []).map(h => ({ id: h.id, title: h.title, startDate: h.startDate, deadline: h.deadline, status: h.status }));
         res.json({ success: true, total: out.length, hearings: out });
     } catch (e) {
         res.status(500).json({ success: false, error: e.message });
