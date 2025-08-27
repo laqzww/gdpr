@@ -380,7 +380,17 @@ const hearingResponsesCache = new Map(); // key: hearingId -> { value, expiresAt
 const hearingMaterialsCache = new Map(); // key: hearingId -> { value, expiresAt }
 
 // Optional persistent disk cache to speed up mock/demo and reduce repeated network traffic
-const PERSIST_DIR = path.join(__dirname, 'data');
+const PERSIST_DIR = (() => {
+    try {
+        const envDir = String(process.env.PERSIST_DIR || '').trim();
+        if (envDir && path.isAbsolute(envDir) && fs.existsSync(envDir)) return envDir;
+    } catch {}
+    try {
+        const candidate2 = path.join(__dirname, 'fetcher', 'data');
+        if (fs.existsSync(candidate2)) return candidate2;
+    } catch {}
+    return path.join(__dirname, 'data');
+})();
 try { fs.mkdirSync(PERSIST_DIR, { recursive: true }); } catch {}
 try { fs.mkdirSync(path.join(PERSIST_DIR, 'hearings'), { recursive: true }); } catch {}
 // Prefer persisted JSON reads by default when available (helps offline mode)
@@ -1711,21 +1721,28 @@ app.get('/api/hearing-index', async (req, res) => {
             } catch (_) {}
         }
 
-        // Fallback: build from persisted JSON files under data/hearings if present
+        // Fallback: build from persisted JSON files under PERSIST_DIR if present
         if (!Array.isArray(hearingIndex) || hearingIndex.length === 0) {
             try {
-                const dir = path.join(__dirname, 'data', 'hearings');
-                const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter(f => f.endsWith('.json')) : [];
+                const baseDir = PERSIST_DIR;
+                const dir1 = path.join(baseDir, 'hearings');
+                const dir2 = baseDir;
+                const candidates = [];
+                if (fs.existsSync(dir1)) candidates.push(dir1);
+                if (fs.existsSync(dir2)) candidates.push(dir2);
                 const items = [];
-                for (const f of files.slice(0, 1000)) {
-                    try {
-                        const raw = fs.readFileSync(path.join(dir, f), 'utf8');
-                        const json = JSON.parse(raw);
-                        const h = json && json.hearing;
-                        if (h && Number.isFinite(Number(h.id))) {
-                            items.push({ id: Number(h.id), title: h.title || `Høring ${h.id}`, startDate: h.startDate || null, deadline: h.deadline || null, status: h.status || null });
-                        }
-                    } catch {}
+                for (const dir of candidates) {
+                    const files = fs.readdirSync(dir).filter(f => f.endsWith('.json'));
+                    for (const f of files.slice(0, 5000)) {
+                        try {
+                            const raw = fs.readFileSync(path.join(dir, f), 'utf8');
+                            const json = JSON.parse(raw);
+                            const h = json && json.hearing;
+                            if (h && Number.isFinite(Number(h.id))) {
+                                items.push({ id: Number(h.id), title: h.title || `Høring ${h.id}`, startDate: h.startDate || null, deadline: h.deadline || null, status: h.status || null });
+                            }
+                        } catch {}
+                    }
                 }
                 if (statusLike) {
                     hearingIndex = items.filter(x => String(x.status || '').toLowerCase().includes(statusLike)).map(enrichHearingForIndex);
@@ -1807,21 +1824,32 @@ app.get('/api/hearings', (req, res) => {
         // Fallback to in-memory index or persisted JSON if DB is empty
         if (!Array.isArray(results) || results.length === 0) {
             try {
-                // If global index is empty, try to warm it from persisted JSON
+                // If global index is empty, try to warm it from persisted JSON (support both data/ and data/hearings/)
                 if (!Array.isArray(hearingIndex) || hearingIndex.length === 0) {
                     try {
-                        const dir = path.join(__dirname, 'data', 'hearings');
+                        const baseDir = PERSIST_DIR;
+                        const dir1 = path.join(baseDir, 'hearings');
+                        const dir2 = baseDir;
+                        const candidates = [];
+                        if (fs.existsSync(dir1)) candidates.push(dir1);
+                        if (fs.existsSync(dir2)) candidates.push(dir2);
+                        const seen = new Set();
                         const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter(f => f.endsWith('.json')) : [];
                         const items = [];
-                        for (const f of files.slice(0, 2000)) {
-                            try {
-                                const rawFile = fs.readFileSync(path.join(dir, f), 'utf8');
-                                const json = JSON.parse(rawFile);
-                                const h = json && json.hearing;
-                                if (h && Number.isFinite(Number(h.id))) {
-                                    items.push({ id: Number(h.id), title: h.title || `Høring ${h.id}`, startDate: h.startDate || null, deadline: h.deadline || null, status: h.status || null });
-                                }
-                            } catch {}
+                        for (const dir of candidates) {
+                            const files = fs.readdirSync(dir).filter(f => f.endsWith('.json'));
+                            for (const f of files.slice(0, 5000)) {
+                                if (seen.has(f)) continue;
+                                seen.add(f);
+                                try {
+                                    const rawFile = fs.readFileSync(path.join(dir, f), 'utf8');
+                                    const json = JSON.parse(rawFile);
+                                    const h = json && json.hearing;
+                                    if (h && Number.isFinite(Number(h.id))) {
+                                        items.push({ id: Number(h.id), title: h.title || `Høring ${h.id}`, startDate: h.startDate || null, deadline: h.deadline || null, status: h.status || null });
+                                    }
+                                } catch {}
+                            }
                         }
                         hearingIndex = items.map(enrichHearingForIndex);
                     } catch {}
@@ -2497,6 +2525,9 @@ app.get('/api/hearing/:id', async (req, res) => {
             const meta = readPersistedHearingWithMeta(hearingId);
             const persisted = meta?.data;
             if (persisted && persisted.success && persisted.hearing) {
+                // Best-effort: also persist to SQLite so subsequent DB reads work offline
+                try { upsertHearing(persisted.hearing); } catch {}
+                try { if (Array.isArray(persisted.responses)) replaceResponses(Number(hearingId), persisted.responses); } catch {}
                 return res.json({
                     success: true,
                     hearing: persisted.hearing,
