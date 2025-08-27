@@ -519,13 +519,43 @@
         
         async function loadSearchIndex() {
             // Load from robust hearing-index endpoint that warms from SQLite or persisted JSON
+            const noStoreOpts = { cache: 'no-store', headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate' } };
+            async function coerceList(data) {
+                try {
+                    if (!data) return [];
+                    if (Array.isArray(data.hearings)) return data.hearings;
+                    if (Array.isArray(data.suggestions)) return data.suggestions;
+                    if (Array.isArray(data.items)) return data.items;
+                    if (Array.isArray(data.results)) return data.results;
+                } catch {}
+                return [];
+            }
             try {
-                const response = await fetch('/api/hearing-index');
-                const data = await response.json();
-                if (data.success && Array.isArray(data.hearings)) {
-                    cachedSearchIndex = data.hearings;
+                let response = await fetch('/api/hearing-index', noStoreOpts);
+                let data = await response.json().catch(() => ({}));
+                let list = await coerceList(data);
+                // If empty, try generic list endpoint
+                if (!Array.isArray(list) || list.length === 0) {
+                    try {
+                        response = await fetch('/api/hearings', noStoreOpts);
+                        data = await response.json().catch(() => ({}));
+                        list = await coerceList(data);
+                    } catch {}
+                }
+                // If still empty, ask server to warm index, then retry once
+                if (!Array.isArray(list) || list.length === 0) {
+                    try { await fetch('/api/rebuild-index', { method: 'POST' }); } catch {}
+                    try { await new Promise(r => setTimeout(r, 1500)); } catch {}
+                    try {
+                        response = await fetch('/api/hearing-index', noStoreOpts);
+                        data = await response.json().catch(() => ({}));
+                        list = await coerceList(data);
+                    } catch {}
+                }
+                if (Array.isArray(list)) {
+                    cachedSearchIndex = list;
                     lastIndexFetch = Date.now();
-                    return data.hearings;
+                    return list;
                 }
             } catch (error) {
                 console.error('Failed to load search index:', error);
@@ -589,9 +619,24 @@
                     const latest = document.getElementById('search').value.trim();
                     if (latest !== query) return;
 
-                    // Local suggestions only; avoid on-the-fly remote queries
-                    const localResults = await searchLocally(query);
-                    displaySuggestions(localResults);
+                    // Prefer local index; if empty, fall back to server-side search
+                    let localResults = await searchLocally(query);
+                    if ((!Array.isArray(localResults) || localResults.length === 0)) {
+                        try {
+                            const resp = await fetch(`/api/search?q=${encodeURIComponent(query)}`, { cache: 'no-store', headers: { 'Cache-Control': 'no-cache' } });
+                            const j = await resp.json().catch(() => ({}));
+                            const suggestions = Array.isArray(j?.suggestions) ? j.suggestions : [];
+                            // Normalize shape to match local items
+                            localResults = suggestions.map(s => ({
+                                id: s.id,
+                                title: s.title,
+                                startDate: s.startDate,
+                                deadline: s.deadline,
+                                status: s.status
+                            }));
+                        } catch {}
+                    }
+                    displaySuggestions(localResults || []);
                 } catch (error) {
                     if (error && error.name === 'AbortError') return;
                     console.error('Search error:', error);
@@ -649,7 +694,8 @@
             `;}).join('');
             
             suggestionsDiv.style.display = 'block';
-            // No client-side title hydration; titles must come from SQLite
+            // Opportunistically hydrate any placeholder titles via fast meta endpoint
+            try { setTimeout(() => { hydrateSuggestionTitles(sorted); }, 0); } catch {}
             
             // Disabled background preload to reduce API calls on low-tier hosting
         }
