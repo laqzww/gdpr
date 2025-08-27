@@ -383,7 +383,9 @@ const hearingMaterialsCache = new Map(); // key: hearingId -> { value, expiresAt
 const PERSIST_DIR = path.join(__dirname, 'data');
 try { fs.mkdirSync(PERSIST_DIR, { recursive: true }); } catch {}
 try { fs.mkdirSync(path.join(PERSIST_DIR, 'hearings'), { recursive: true }); } catch {}
-const PERSIST_PREFER = String(process.env.PERSIST_PREFER || '').toLowerCase() === 'true';
+// Prefer persisted JSON reads by default when available (helps offline mode)
+const PERSIST_PREFER = String(process.env.PERSIST_PREFER || 'true').toLowerCase() !== 'false';
+const OFFLINE_MODE = String(process.env.OFFLINE_MODE || '').toLowerCase() === 'true';
 const PERSIST_ALWAYS_WRITE = String(process.env.PERSIST_ALWAYS_WRITE || 'true').toLowerCase() !== 'false';
 const PERSIST_MAX_AGE_MS = Number(process.env.PERSIST_MAX_AGE_MS || 0); // 0 disables TTL (never stale)
 
@@ -2631,6 +2633,16 @@ app.get('/api/hearing/:id/meta', async (req, res) => {
         const axiosInstance = axios.create({ headers: { 'User-Agent': 'Mozilla/5.0', 'Cookie': 'kk-xyz=1' }, timeout: 30000 });
 
         let hearingMeta = { title: null, deadline: null, startDate: null, status: null };
+        // Offline-first: if we have meta in DB, use it and return immediately
+        try {
+            const sqlite = require('./db/sqlite');
+            if (sqlite && sqlite.db && sqlite.db.prepare) {
+                const row = sqlite.db.prepare(`SELECT title, start_date as startDate, deadline, status FROM hearings WHERE id=?`).get(Number(hearingId));
+                if (row && row.title) {
+                    return res.json({ success: true, hearing: { id: Number(hearingId), title: row.title, startDate: row.startDate || null, deadline: row.deadline || null, status: row.status || 'ukendt', url: `${baseUrl}/hearing/${hearingId}/comments` } });
+                }
+            }
+        } catch {}
         try {
             const rootPage = await withRetries(() => fetchHearingRootPage(baseUrl, hearingId, axiosInstance), { attempts: 3, baseDelayMs: 600 });
             if (rootPage.nextJson) hearingMeta = extractMetaFromNextJson(rootPage.nextJson);
@@ -2698,6 +2710,21 @@ app.get('/api/hearing/:id/responses', async (req, res) => {
         }
         const noCache = String(req.query.nocache || '').trim() === '1';
         const preferPersist = PERSIST_PREFER || String(req.query.persist || '').trim() === '1';
+        // Offline-first: read from DB if available
+        try {
+            const sqlite = require('./db/sqlite');
+            if (sqlite && sqlite.db && sqlite.db.prepare) {
+                const rows = sqlite.db.prepare(`SELECT response_id as id, text, author, organization, on_behalf_of as onBehalfOf, submitted_at as submittedAt FROM responses WHERE hearing_id=? ORDER BY response_id ASC`).all(hearingId);
+                const atts = sqlite.db.prepare(`SELECT response_id as id, idx, filename, url FROM attachments WHERE hearing_id=? ORDER BY response_id ASC, idx ASC`).all(hearingId);
+                const byId = new Map(rows.map(r => [Number(r.id), { ...r, attachments: [] }]));
+                for (const a of atts) {
+                    const t = byId.get(Number(a.id)); if (t) t.attachments.push({ filename: a.filename, url: a.url });
+                }
+                const arr = Array.from(byId.values());
+                if (arr.length) return res.json({ success: true, totalResponses: arr.length, responses: arr });
+            }
+        } catch {}
+        // Persisted JSON fallback
         if (preferPersist) {
             const meta = readPersistedHearingWithMeta(hearingId);
             const persisted = meta?.data;
