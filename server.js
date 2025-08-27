@@ -1801,6 +1801,53 @@ app.get('/api/hearing-index', async (req, res) => {
                 items = Array.from(byId.values());
             }
         } catch {}
+
+        // Backfill missing/placeholder titles and meta from HTML (__NEXT_DATA__) for up to 50 items
+        try {
+            const baseUrl = 'https://blivhoert.kk.dk';
+            const axiosInstance = axios.create({
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/json',
+                    'Accept-Language': 'da-DK,da;q=0.9,en;q=0.8',
+                    'Cookie': 'kk-xyz=1',
+                    'Origin': baseUrl,
+                    'Referer': baseUrl
+                },
+                timeout: 20000,
+                validateStatus: () => true
+            });
+            const needs = items.filter(h => !h || !h.title || /^Høring\s+\d+$/i.test(String(h.title||''))).slice(0, 50);
+            for (const h of needs) {
+                try {
+                    const root = await fetchHearingRootPage(baseUrl, h.id, axiosInstance);
+                    if (root && root.nextJson) {
+                        const meta = extractMetaFromNextJson(root.nextJson);
+                        if (meta) {
+                            if (meta.title) h.title = meta.title;
+                            if (meta.startDate) h.startDate = meta.startDate;
+                            if (meta.deadline) h.deadline = meta.deadline;
+                            if (meta.status) h.status = meta.status;
+                            try { upsertHearing({ id: h.id, title: h.title || `Høring ${h.id}`, startDate: h.startDate || null, deadline: h.deadline || null, status: h.status || null }); } catch {}
+                            // Update in-memory index as well
+                            const idx = hearingIndex.findIndex(x => Number(x.id) === Number(h.id));
+                            if (idx >= 0) {
+                                const updated = { ...hearingIndex[idx] };
+                                updated.title = h.title;
+                                updated.startDate = h.startDate;
+                                updated.deadline = h.deadline;
+                                updated.status = h.status;
+                                updated.normalizedTitle = normalizeDanish(updated.title || '');
+                                updated.titleTokens = tokenize(updated.title || '');
+                                updated.deadlineTs = updated.deadline ? new Date(updated.deadline).getTime() : null;
+                                updated.isOpen = computeIsOpen(updated.status, updated.deadline);
+                                hearingIndex[idx] = updated;
+                            }
+                        }
+                    }
+                } catch {}
+            }
+        } catch {}
         if (statusLike) {
             items = items.filter(h => String(h.status || '').toLowerCase().includes(statusLike));
         }
