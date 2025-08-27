@@ -1769,6 +1769,38 @@ app.get('/api/hearing-index', async (req, res) => {
         }
 
         let items = Array.isArray(hearingIndex) ? hearingIndex : [];
+        // If index looks too small, augment from persisted JSON and persist to SQLite
+        try {
+            if (!Array.isArray(items) || items.length < 10) {
+                const baseDir = PERSIST_DIR;
+                const dir1 = path.join(baseDir, 'hearings');
+                const dir2 = baseDir;
+                const candidates = [];
+                if (fs.existsSync(dir1)) candidates.push(dir1);
+                if (fs.existsSync(dir2)) candidates.push(dir2);
+                const byId = new Map(items.map(h => [Number(h.id), h]));
+                for (const dir of candidates) {
+                    const files = fs.readdirSync(dir).filter(f => f.endsWith('.json'));
+                    for (const f of files.slice(0, 5000)) {
+                        try {
+                            const raw = fs.readFileSync(path.join(dir, f), 'utf8');
+                            const json = JSON.parse(raw);
+                            const h = json && json.hearing;
+                            if (h && Number.isFinite(Number(h.id))) {
+                                const idNum = Number(h.id);
+                                if (!byId.has(idNum)) {
+                                    const isPlaceholderTitle = !h.title || /^Høring\s+\d+$/i.test(String(h.title||''));
+                                    const rec = enrichHearingForIndex({ id: idNum, title: isPlaceholderTitle ? `Høring ${idNum}` : h.title, startDate: h.startDate || null, deadline: h.deadline || null, status: h.status || null });
+                                    byId.set(idNum, rec);
+                                    try { upsertHearing({ id: idNum, title: rec.title, startDate: rec.startDate, deadline: rec.deadline, status: rec.status }); } catch {}
+                                }
+                            }
+                        } catch {}
+                    }
+                }
+                items = Array.from(byId.values());
+            }
+        } catch {}
         if (statusLike) {
             items = items.filter(h => String(h.status || '').toLowerCase().includes(statusLike));
         }
