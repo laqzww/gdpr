@@ -413,8 +413,8 @@ function listUploads(sessionId, hearingId) {
       .all(sessionId, hearingId);
 }
 
-module.exports = {
-    db,
+// Export an API object with a live getter for `db` so callers always see the current handle
+const api = {
     DB_PATH,
     init,
     upsertHearing,
@@ -434,5 +434,7 @@ module.exports = {
     addUpload,
     listUploads
 };
+Object.defineProperty(api, 'db', { get: () => db });
+module.exports = api;
 
 

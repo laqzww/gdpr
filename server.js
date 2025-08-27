@@ -268,13 +268,13 @@ try { fs.mkdirSync(path.join(__dirname, 'data'), { recursive: true }); } catch {
 console.log('[Server] Starting SQLite initialization...');
 console.log('[Server] Current directory:', __dirname);
 console.log('[Server] Data directory:', path.join(__dirname, 'data'));
-try {
-    initDb();
+try { 
+    initDb(); 
     // Prime a trivial statement to ensure better-sqlite3 loads and DB file is touchable
     const sqlite = require('./db/sqlite');
     try { if (sqlite && sqlite.db && sqlite.db.prepare) sqlite.db.prepare('SELECT 1').get(); } catch {}
     console.log('[Server] SQLite initialized successfully');
-} catch (e) {
+} catch (e) { 
     console.error('[Server] SQLite init failed:', e.message);
     console.error('[Server] Full error:', e);
 }
@@ -1996,7 +1996,7 @@ async function extractStructuredFromNextJson(jsonRoot, baseUrl) {
                 scanNode(node[k], node);
             }
         }
-
+        
         for (const query of queries) {
             const root1 = query?.state?.data;
             if (root1) scanNode(root1, null);
@@ -2012,77 +2012,77 @@ async function extractStructuredFromNextJson(jsonRoot, baseUrl) {
             }
             const comments = Array.isArray(env?.data) ? env.data : [];
             const included = Array.isArray(env?.included) ? env.included : [];
-            const contentById = new Map();
-            included.filter(x => x?.type === 'content').forEach(c => contentById.set(String(c.id), c));
-            const userById = new Map();
-            included.filter(x => x?.type === 'user').forEach(u => userById.set(String(u.id), u));
-            const companyById = new Map();
-            included.filter(x => x?.type === 'company').forEach(c => companyById.set(String(c.id), c));
-
-            for (const item of comments) {
-                if (!item || item.type !== 'comment') continue;
-                const attrs = item.attributes || {};
-                const rel = item.relationships || {};
-                const responseNumber = attrs.number || null;
+                const contentById = new Map();
+                included.filter(x => x?.type === 'content').forEach(c => contentById.set(String(c.id), c));
+                const userById = new Map();
+                included.filter(x => x?.type === 'user').forEach(u => userById.set(String(u.id), u));
+                const companyById = new Map();
+                included.filter(x => x?.type === 'company').forEach(c => companyById.set(String(c.id), c));
+                                
+                for (const item of comments) {
+                    if (!item || item.type !== 'comment') continue;
+                    const attrs = item.attributes || {};
+                    const rel = item.relationships || {};
+                    const responseNumber = attrs.number || null;
                 if (responseNumber == null) continue;
                 if (seenIds.has(Number(responseNumber))) continue;
                 seenIds.add(Number(responseNumber));
 
-                const created = attrs.created || null;
-                const withdrawn = attrs.withdrawn || attrs.isDeleted || false;
-                const onBehalfOf = attrs.onBehalfOf || null;
-
-                let author = null;
-                let organization = null;
-                let authorAddress = null;
-
-                const userRelId = rel?.user?.data?.id && String(rel.user.data.id);
-                if (userRelId && userById.has(userRelId)) {
-                    const u = userById.get(userRelId);
-                    const uattrs = u?.attributes || {};
-                    author = uattrs.employeeDisplayName || uattrs.email || uattrs.identifier || null;
-                    const street = uattrs.streetName || '';
-                    const postal = uattrs.postalCode || '';
-                    const city = uattrs.city || '';
-                    authorAddress = [street, postal, city].filter(Boolean).join(', ') || null;
-                    const companyRelId = u?.relationships?.company?.data?.id && String(u.relationships.company.data.id);
-                    if (companyRelId && companyById.has(companyRelId)) {
-                        const comp = companyById.get(companyRelId);
-                        organization = comp?.attributes?.name || null;
+                    const created = attrs.created || null;
+                    const withdrawn = attrs.withdrawn || attrs.isDeleted || false;
+                    const onBehalfOf = attrs.onBehalfOf || null;
+                                    
+                    let author = null;
+                    let organization = null;
+                    let authorAddress = null;
+                                    
+                    const userRelId = rel?.user?.data?.id && String(rel.user.data.id);
+                    if (userRelId && userById.has(userRelId)) {
+                        const u = userById.get(userRelId);
+                        const uattrs = u?.attributes || {};
+                        author = uattrs.employeeDisplayName || uattrs.email || uattrs.identifier || null;
+                        const street = uattrs.streetName || '';
+                        const postal = uattrs.postalCode || '';
+                        const city = uattrs.city || '';
+                        authorAddress = [street, postal, city].filter(Boolean).join(', ') || null;
+                        const companyRelId = u?.relationships?.company?.data?.id && String(u.relationships.company.data.id);
+                        if (companyRelId && companyById.has(companyRelId)) {
+                            const comp = companyById.get(companyRelId);
+                            organization = comp?.attributes?.name || null;
+                        }
                     }
-                }
-
-                const contentRels = Array.isArray(rel?.contents?.data) ? rel.contents.data : [];
-                let text = '';
-                const attachments = [];
-                for (const cref of contentRels) {
-                    const cid = cref?.id && String(cref.id);
-                    if (!cid || !contentById.has(cid)) continue;
-                    const c = contentById.get(cid);
-                    const cattrs = c?.attributes || {};
-                    const hasText = typeof cattrs.textContent === 'string' && cattrs.textContent.trim().length > 0;
-                    const hasFile = typeof cattrs.filePath === 'string' && cattrs.filePath.trim().length > 0;
+                                    
+                    const contentRels = Array.isArray(rel?.contents?.data) ? rel.contents.data : [];
+                    let text = '';
+                    const attachments = [];
+                    for (const cref of contentRels) {
+                        const cid = cref?.id && String(cref.id);
+                        if (!cid || !contentById.has(cid)) continue;
+                        const c = contentById.get(cid);
+                        const cattrs = c?.attributes || {};
+                        const hasText = typeof cattrs.textContent === 'string' && cattrs.textContent.trim().length > 0;
+                        const hasFile = typeof cattrs.filePath === 'string' && cattrs.filePath.trim().length > 0;
                     if (hasText) text += (text ? '\n\n' : '') + String(cattrs.textContent).trim();
-                    if (hasFile) {
-                        const filePath = String(cattrs.filePath || '').trim();
-                        const fileName = String(cattrs.fileName || '').trim() || (filePath.split('/').pop() || 'Dokument');
+                        if (hasFile) {
+                            const filePath = String(cattrs.filePath || '').trim();
+                            const fileName = String(cattrs.fileName || '').trim() || (filePath.split('/').pop() || 'Dokument');
                         attachments.push({ url: buildFileUrl(baseUrl, filePath, fileName), filename: fileName });
+                        }
                     }
-                }
-                if (!withdrawn && (text.trim().length > 0 || attachments.length > 0)) {
-                    out.push({
-                        responseNumber,
-                        text: fixEncoding(text || ''),
-                        author: author || null,
-                        authorAddress,
-                        organization: organization || null,
-                        onBehalfOf: onBehalfOf || null,
-                        submittedAt: created || null,
-                        attachments
-                    });
+                    if (!withdrawn && (text.trim().length > 0 || attachments.length > 0)) {
+                        out.push({
+                            responseNumber,
+                            text: fixEncoding(text || ''),
+                            author: author || null,
+                            authorAddress,
+                            organization: organization || null,
+                            onBehalfOf: onBehalfOf || null,
+                            submittedAt: created || null,
+                            attachments
+                        });
+                    }
                 }
             }
-        }
         return { responses: out, totalPages };
     } catch (e) {
         console.error("Error in extractStructuredFromNextJson:", e);
@@ -2871,9 +2871,9 @@ app.get('/api/hearing/:id/materials', async (req, res) => {
                 const meta = readPersistedHearingWithMeta(hearingId);
                 const persisted = meta?.data;
                 const materials = (persisted && Array.isArray(persisted.materials)) ? persisted.materials : [];
-                return res.json({ success: true, materials });
-            } catch {
-                return res.json({ success: true, materials: [] });
+            return res.json({ success: true, materials });
+        } catch {
+            return res.json({ success: true, materials: [] });
             }
         }
     } catch (e) {
@@ -4637,6 +4637,10 @@ app.post('/api/db-reinit', (req, res) => {
     try {
         console.log('[API] Forcing database re-initialization...');
         initDb();
+        try {
+            const sqlite = require('./db/sqlite');
+            if (sqlite && sqlite.db && sqlite.db.prepare) sqlite.db.prepare('SELECT 1').get();
+        } catch {}
         res.json({ success: true, message: 'Database re-initialized' });
     } catch (e) {
         console.error('[API] Database re-init failed:', e);
@@ -4785,9 +4789,9 @@ app.post('/api/prefetch/:id', async (req, res) => {
                 if (Array.isArray(payload.responses)) sqlite.replaceResponses(hearingId, payload.responses);
                 if (Array.isArray(payload.materials)) sqlite.replaceMaterials(hearingId, payload.materials);
             } else {
-                if (payload.hearing) upsertHearing(payload.hearing);
-                if (Array.isArray(payload.responses)) replaceResponses(hearingId, payload.responses);
-                if (Array.isArray(payload.materials)) replaceMaterials(hearingId, payload.materials);
+            if (payload.hearing) upsertHearing(payload.hearing);
+            if (Array.isArray(payload.responses)) replaceResponses(hearingId, payload.responses);
+            if (Array.isArray(payload.materials)) replaceMaterials(hearingId, payload.materials);
             }
         } catch (e) {
             console.error('[prefetch] SQLite persist failed:', e && e.message ? e.message : e);
