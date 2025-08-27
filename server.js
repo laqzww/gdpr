@@ -385,10 +385,6 @@ const PERSIST_DIR = (() => {
         const envDir = String(process.env.PERSIST_DIR || '').trim();
         if (envDir && path.isAbsolute(envDir) && fs.existsSync(envDir)) return envDir;
     } catch {}
-    try {
-        const candidate2 = path.join(__dirname, 'fetcher', 'data');
-        if (fs.existsSync(candidate2)) return candidate2;
-    } catch {}
     return path.join(__dirname, 'data');
 })();
 try { fs.mkdirSync(PERSIST_DIR, { recursive: true }); } catch {}
