@@ -4777,12 +4777,21 @@ app.post('/api/prefetch/:id', async (req, res) => {
             }
         } catch {}
         writePersistedHearing(hearingId, payload);
-        // Also persist to SQLite for stable reads
+        // Also persist to SQLite for stable reads (use fresh handle to avoid stale captures)
         try {
-            if (payload.hearing) upsertHearing(payload.hearing);
-            if (Array.isArray(payload.responses)) replaceResponses(hearingId, payload.responses);
-            if (Array.isArray(payload.materials)) replaceMaterials(hearingId, payload.materials);
-        } catch {}
+            const sqlite = require('./db/sqlite');
+            if (sqlite && typeof sqlite.upsertHearing === 'function' && sqlite.db && sqlite.db.prepare) {
+                if (payload.hearing) sqlite.upsertHearing(payload.hearing);
+                if (Array.isArray(payload.responses)) sqlite.replaceResponses(hearingId, payload.responses);
+                if (Array.isArray(payload.materials)) sqlite.replaceMaterials(hearingId, payload.materials);
+            } else {
+                if (payload.hearing) upsertHearing(payload.hearing);
+                if (Array.isArray(payload.responses)) replaceResponses(hearingId, payload.responses);
+                if (Array.isArray(payload.materials)) replaceMaterials(hearingId, payload.materials);
+            }
+        } catch (e) {
+            console.error('[prefetch] SQLite persist failed:', e && e.message ? e.message : e);
+        }
         prefetchInFlight.delete(hearingId);
         res.json({ success: true, message: 'Prefetch gemt', counts: { responses: payload.responses?.length || 0, materials: payload.materials?.length || 0 } });
     } catch (e) {
