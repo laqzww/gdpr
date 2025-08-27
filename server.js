@@ -1714,24 +1714,21 @@ app.get('/api/search', async (req, res) => {
 app.get('/api/hearing-index', async (req, res) => {
     try {
         const statusLike = String(req.query.status || '').trim().toLowerCase();
-
-        // If index is empty, first try to hydrate from SQLite
-        if (!Array.isArray(hearingIndex) || hearingIndex.length === 0) {
-            try {
-                const sqlite = require('./db/sqlite');
-                if (sqlite && sqlite.db && sqlite.db.prepare) {
-                    let rows;
-                    if (statusLike) {
-                        rows = sqlite.db.prepare(`SELECT id,title,start_date as startDate,deadline,status FROM hearings WHERE archived IS NOT 1 AND LOWER(status) LIKE '%' || ? || '%'`).all(statusLike);
-                    } else {
-                        rows = sqlite.db.prepare(`SELECT id,title,start_date as startDate,deadline,status FROM hearings WHERE archived IS NOT 1`).all();
-                    }
-                    hearingIndex = (rows || []).map(enrichHearingForIndex);
+        // DB-first: always prefer current SQLite state
+        try {
+            const sqlite = require('./db/sqlite');
+            if (sqlite && sqlite.db && sqlite.db.prepare) {
+                let rows;
+                if (statusLike) {
+                    rows = sqlite.db.prepare(`SELECT id,title,start_date as startDate,deadline,status FROM hearings WHERE archived IS NOT 1 AND LOWER(status) LIKE '%' || ? || '%'`).all(statusLike);
+                } else {
+                    rows = sqlite.db.prepare(`SELECT id,title,start_date as startDate,deadline,status FROM hearings WHERE archived IS NOT 1`).all();
                 }
-            } catch (_) {}
-        }
+                hearingIndex = (rows || []).map(enrichHearingForIndex);
+            }
+        } catch (_) {}
 
-        // Fallback: build from persisted JSON files under PERSIST_DIR if present
+        // Fallback: build from persisted JSON files under PERSIST_DIR if DB empty
         if (!Array.isArray(hearingIndex) || hearingIndex.length === 0) {
             try {
                 const baseDir = PERSIST_DIR;
@@ -1763,9 +1760,22 @@ app.get('/api/hearing-index', async (req, res) => {
             } catch {}
         }
 
-        // If still empty, warm from remote API
-        if (!Array.isArray(hearingIndex) || hearingIndex.length === 0) {
+        // If still empty or very small, warm from remote API to build index and persist to DB
+        if (!Array.isArray(hearingIndex) || hearingIndex.length < 10) {
             try { await warmHearingIndex(); } catch (_) {}
+            // Refresh from DB after warm
+            try {
+                const sqlite = require('./db/sqlite');
+                if (sqlite && sqlite.db && sqlite.db.prepare) {
+                    let rows;
+                    if (statusLike) {
+                        rows = sqlite.db.prepare(`SELECT id,title,start_date as startDate,deadline,status FROM hearings WHERE archived IS NOT 1 AND LOWER(status) LIKE '%' || ? || '%'`).all(statusLike);
+                    } else {
+                        rows = sqlite.db.prepare(`SELECT id,title,start_date as startDate,deadline,status FROM hearings WHERE archived IS NOT 1`).all();
+                    }
+                    hearingIndex = (rows || []).map(enrichHearingForIndex);
+                }
+            } catch (_) {}
         }
 
         let items = Array.isArray(hearingIndex) ? hearingIndex : [];
