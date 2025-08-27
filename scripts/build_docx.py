@@ -65,7 +65,7 @@ def _try_runtime_install():
             target.mkdir(parents=True, exist_ok=True)
         except Exception:
             pass
-        cmd = [sys.executable, '-m', 'pip', 'install', '--no-cache-dir', '--no-warn-script-location', '--prefer-binary', '--only-binary', ':all:', '--upgrade', '--target', str(target), 'python-docx>=1.2.0', 'lxml<5', 'Pillow>=8.4.0']
+        cmd = [sys.executable, '-m', 'pip', 'install', '--no-cache-dir', '--no-warn-script-location', '--prefer-binary', '--only-binary', ':all:', '--upgrade', '--target', str(target), 'python-docx>=1.2.0', 'lxml>=5', 'Pillow>=10.0.0']
         subprocess.run(cmd, check=False, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         if str(target) not in sys.path:
             sys.path.insert(0, str(target))
