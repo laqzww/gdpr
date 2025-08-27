@@ -1714,6 +1714,7 @@ app.get('/api/search', async (req, res) => {
 app.get('/api/hearing-index', async (req, res) => {
     try {
         const statusLike = String(req.query.status || '').trim().toLowerCase();
+        const dbOnly = String(req.query.db || '').trim() === '1';
         // DB-first: always prefer current SQLite state
         try {
             const sqlite = require('./db/sqlite');
@@ -1727,6 +1728,13 @@ app.get('/api/hearing-index', async (req, res) => {
                 hearingIndex = (rows || []).map(enrichHearingForIndex);
             }
         } catch (_) {}
+
+        // If explicitly DB-only, return immediately (even if empty)
+        if (dbOnly) {
+            const itemsDbOnly = Array.isArray(hearingIndex) ? hearingIndex : [];
+            const hearingsDbOnly = itemsDbOnly.map(h => ({ id: h.id, title: h.title, startDate: h.startDate, deadline: h.deadline, status: h.status }));
+            return res.json({ success: true, hearings: hearingsDbOnly, count: hearingsDbOnly.length });
+        }
 
         // Fallback: build from persisted JSON files under PERSIST_DIR if DB empty
         if (!Array.isArray(hearingIndex) || hearingIndex.length === 0) {
@@ -1762,6 +1770,7 @@ app.get('/api/hearing-index', async (req, res) => {
 
         // If still empty or very small, warm from remote API to build index and persist to DB
         if (!Array.isArray(hearingIndex) || hearingIndex.length < 10) {
+            // Strict DB-backed warm path only
             try { await warmHearingIndex(); } catch (_) {}
             // Refresh from DB after warm
             try {
