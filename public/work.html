@@ -1016,15 +1016,22 @@
                 const r = await fetch(`/api/hearing/${encodeURIComponent(hearingId)}?t=${Date.now()}&db=1`);
                 const j = await r.json().catch(()=>({}));
                 if (j && j.success && (j.found || j.hearing)) {
-                    // Merge DB payload but keep any previously fetched meta title
                     const prevTitle = lastFetched && lastFetched.hearing && lastFetched.hearing.title;
                     lastFetched = { hearing: j.hearing, responses: j.responses || [], materials: [], uploads: [] };
-                    if (prevTitle) {
-                        lastFetched.hearing.title = prevTitle;
-                    }
+                    if (prevTitle) lastFetched.hearing.title = prevTitle;
                     try { await applySavedEdits(); } catch {}
                     displayHearingInfo(lastFetched.hearing);
-                    displayResponses(lastFetched.responses);
+                    // If DB has no responses, fetch via crawler endpoint and persist
+                    if (!Array.isArray(lastFetched.responses) || lastFetched.responses.length === 0) {
+                        try {
+                            const rr = await fetch(`/api/hearing/${encodeURIComponent(hearingId)}/responses?nocache=1&t=${Date.now()}`);
+                            const jr = await rr.json().catch(()=>({}));
+                            if (jr && jr.success && Array.isArray(jr.responses)) {
+                                lastFetched.responses = jr.responses;
+                            }
+                        } catch {}
+                    }
+                    displayResponses(lastFetched.responses || []);
                     // Materials (DB-only)
                     try {
                         const rmat = await fetch(`/api/hearing/${encodeURIComponent(hearingId)}/materials?db=1&t=${Date.now()}`);

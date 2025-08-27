@@ -518,9 +518,9 @@
         let lastSuggestionsKey = '';
         
         async function loadSearchIndex() {
-            // Always load from server (SQLite)
+            // Load from robust hearing-index endpoint that warms from SQLite or persisted JSON
             try {
-                const response = await fetch('/api/hearings');
+                const response = await fetch('/api/hearing-index');
                 const data = await response.json();
                 if (data.success && Array.isArray(data.hearings)) {
                     cachedSearchIndex = data.hearings;

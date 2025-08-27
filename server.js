@@ -2464,10 +2464,6 @@ app.get('/api/hearing/:id', async (req, res) => {
         // DB-only read path: no network fetches here
         const fromDb = readAggregate(hearingId);
         if (fromDb && fromDb.hearing) {
-            // Enforce dataset scope: only serve Afventer konklusion
-            if (!statusMatchesRefreshTargets(fromDb.hearing.status || '')) {
-                return res.status(404).json({ success: false, message: 'Ikke i målgruppen (status)' });
-            }
             return res.json({ success: true, hearing: fromDb.hearing, totalPages: undefined, totalResponses: (fromDb.responses||[]).length, responses: fromDb.responses });
         }
         return res.status(404).json({ success: false, message: 'Ikke fundet i databasen' });
@@ -2814,6 +2810,9 @@ app.get('/api/hearing/:id/responses', async (req, res) => {
             } catch {}
         }
         const payload = { success: true, totalResponses: normalized.length, responses: normalized };
+        // Persist to SQLite for DB-first flows
+        try { upsertHearing({ id: Number(hearingId), title: `Høring ${hearingId}`, startDate: null, deadline: null, status: 'ukendt' }); } catch (_) {}
+        try { replaceResponses(Number(hearingId), normalized); } catch (_) {}
         cacheSet(hearingResponsesCache, hearingId, payload);
         if (PERSIST_ALWAYS_WRITE) {
             const existingMeta = readPersistedHearingWithMeta(hearingId);
