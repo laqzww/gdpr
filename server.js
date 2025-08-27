@@ -1786,85 +1786,21 @@ app.get('/api/test-outbound', async (req, res) => {
 });
 
 // Full hearings index with optional filtering and ordering
-app.get('/api/hearings', async (req, res) => {
+app.get('/api/hearings', (req, res) => {
     try {
         const { q = '' } = req.query;
         const raw = String(q || '').trim();
         const norm = normalizeDanish(raw);
 
-        let results = [];
-        // 1) Try DB if available
-        try {
-            const sqlite = require('./db/sqlite');
-            if (sqlite && sqlite.db && sqlite.db.prepare) {
-                const rows = sqlite.db.prepare(`SELECT id,title,start_date as startDate,deadline,status FROM hearings WHERE archived IS NOT 1`).all();
-                results = Array.isArray(rows) ? rows : [];
-            }
-        } catch {}
-
-        // 2) Fallback to in-memory index if DB empty
-        if (!Array.isArray(results) || results.length === 0) {
-            try {
-                if (Array.isArray(hearingIndex) && hearingIndex.length > 0) {
-                    results = hearingIndex.map(h => ({ id: h.id, title: h.title, startDate: h.startDate, deadline: h.deadline, status: h.status }));
-                }
-            } catch {}
+        const sqlite = require('./db/sqlite');
+        if (!sqlite || !sqlite.db || !sqlite.db.prepare) {
+            return res.json({ success: true, total: 0, hearings: [] });
         }
 
-        // 3) Fallback to persisted JSON files if still empty
-        if (!Array.isArray(results) || results.length === 0) {
-            try {
-                const dir = path.join(PERSIST_DIR, 'hearings');
-                const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter(f => f.endsWith('.json')) : [];
-                const items = [];
-                for (const f of files) {
-                    try {
-                        const j = JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
-                        if (j && j.hearing && j.hearing.id != null) {
-                            const h = j.hearing;
-                            items.push({ id: Number(h.id), title: h.title || '', startDate: h.startDate || null, deadline: h.deadline || null, status: h.status || null });
-                        }
-                    } catch {}
-                }
-                if (items.length) results = items;
-            } catch {}
-        }
+        let results = sqlite.db
+            .prepare(`SELECT id, title, start_date as startDate, deadline, status FROM hearings WHERE archived IS NOT 1`)
+            .all();
 
-        // Enrich missing titles using meta extraction (HTML __NEXT_DATA__ first, then JSON API)
-        try {
-            const baseUrl = 'https://blivhoert.kk.dk';
-            const axiosInstance = axios.create({ headers: { 'User-Agent': 'Mozilla/5.0', 'Cookie': 'kk-xyz=1' }, timeout: 20000 });
-            for (let i = 0; i < results.length; i++) {
-                const item = results[i];
-                if (!item || (item.title && String(item.title).trim())) continue;
-                const hid = item.id;
-                try {
-                    let meta = { title: null };
-                    try {
-                        const rootPage = await withRetries(() => fetchHearingRootPage(baseUrl, hid, axiosInstance), { attempts: 2, baseDelayMs: 400 });
-                        if (rootPage && rootPage.nextJson) meta = extractMetaFromNextJson(rootPage.nextJson);
-                    } catch {}
-                    if (!meta.title) {
-                        try {
-                            const apiUrl = `${baseUrl}/api/hearing/${hid}`;
-                            const r = await axiosInstance.get(apiUrl, { validateStatus: () => true, headers: { Accept: 'application/json' } });
-                            if (r.status === 200 && r.data) {
-                                const data = r.data;
-                                const included = Array.isArray(data?.included) ? data.included : [];
-                                const contents = included.filter(x => x?.type === 'content');
-                                const titleContent = contents.find(c => String(c?.relationships?.field?.data?.id || '') === '1' && c?.attributes?.textContent);
-                                if (titleContent) meta.title = fixEncoding(String(titleContent.attributes.textContent).trim());
-                            }
-                        } catch {}
-                    }
-                    if (meta && meta.title) {
-                        results[i] = { ...item, title: meta.title };
-                    }
-                } catch {}
-            }
-        } catch {}
-
-        // Apply optional query filter
         if (norm) {
             const isNumeric = /^\d+$/.test(raw);
             results = (results || []).filter(h => {
@@ -1875,7 +1811,6 @@ app.get('/api/hearings', async (req, res) => {
             });
         }
 
-        // Sort by earliest deadline, then id
         results.sort((a, b) => {
             const da = a && a.deadline ? new Date(a.deadline).getTime() : Infinity;
             const db = b && b.deadline ? new Date(b.deadline).getTime() : Infinity;

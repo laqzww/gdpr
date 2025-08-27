@@ -1019,7 +1019,7 @@
                     // Merge DB payload but keep any previously fetched meta title
                     const prevTitle = lastFetched && lastFetched.hearing && lastFetched.hearing.title;
                     lastFetched = { hearing: j.hearing, responses: j.responses || [], materials: [], uploads: [] };
-                    if (prevTitle && (!lastFetched.hearing.title || String(lastFetched.hearing.title) === String(lastFetched.hearing.id))) {
+                    if (prevTitle) {
                         lastFetched.hearing.title = prevTitle;
                     }
                     try { await applySavedEdits(); } catch {}
