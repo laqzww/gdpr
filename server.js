@@ -1830,6 +1830,40 @@ app.get('/api/hearings', async (req, res) => {
             } catch {}
         }
 
+        // Enrich missing titles using meta extraction (HTML __NEXT_DATA__ first, then JSON API)
+        try {
+            const baseUrl = 'https://blivhoert.kk.dk';
+            const axiosInstance = axios.create({ headers: { 'User-Agent': 'Mozilla/5.0', 'Cookie': 'kk-xyz=1' }, timeout: 20000 });
+            for (let i = 0; i < results.length; i++) {
+                const item = results[i];
+                if (!item || (item.title && String(item.title).trim())) continue;
+                const hid = item.id;
+                try {
+                    let meta = { title: null };
+                    try {
+                        const rootPage = await withRetries(() => fetchHearingRootPage(baseUrl, hid, axiosInstance), { attempts: 2, baseDelayMs: 400 });
+                        if (rootPage && rootPage.nextJson) meta = extractMetaFromNextJson(rootPage.nextJson);
+                    } catch {}
+                    if (!meta.title) {
+                        try {
+                            const apiUrl = `${baseUrl}/api/hearing/${hid}`;
+                            const r = await axiosInstance.get(apiUrl, { validateStatus: () => true, headers: { Accept: 'application/json' } });
+                            if (r.status === 200 && r.data) {
+                                const data = r.data;
+                                const included = Array.isArray(data?.included) ? data.included : [];
+                                const contents = included.filter(x => x?.type === 'content');
+                                const titleContent = contents.find(c => String(c?.relationships?.field?.data?.id || '') === '1' && c?.attributes?.textContent);
+                                if (titleContent) meta.title = fixEncoding(String(titleContent.attributes.textContent).trim());
+                            }
+                        } catch {}
+                    }
+                    if (meta && meta.title) {
+                        results[i] = { ...item, title: meta.title };
+                    }
+                } catch {}
+            }
+        } catch {}
+
         // Apply optional query filter
         if (norm) {
             const isNumeric = /^\d+$/.test(raw);
