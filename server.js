@@ -1735,7 +1735,8 @@ app.get('/api/hearing-index', async (req, res) => {
                             const json = JSON.parse(raw);
                             const h = json && json.hearing;
                             if (h && Number.isFinite(Number(h.id))) {
-                                items.push({ id: Number(h.id), title: h.title || `Høring ${h.id}`, startDate: h.startDate || null, deadline: h.deadline || null, status: h.status || null });
+                                const isPlaceholderTitle = !h.title || /^Høring\s+\d+$/i.test(String(h.title||''));
+                                items.push({ id: Number(h.id), title: isPlaceholderTitle ? `Høring ${h.id}` : h.title, startDate: h.startDate || null, deadline: h.deadline || null, status: h.status || null });
                             }
                         } catch {}
                     }
@@ -2515,6 +2516,22 @@ app.get('/api/hearing/:id', async (req, res) => {
         // DB-first read path; fallback to persisted JSON snapshot if available
         const fromDb = readAggregate(hearingId);
         if (fromDb && fromDb.hearing) {
+            // Improve meta from persisted JSON if DB has placeholders
+            try {
+                const meta = readPersistedHearingWithMeta(hearingId);
+                const persisted = meta?.data;
+                if (persisted && persisted.hearing) {
+                    const dbH = fromDb.hearing || {};
+                    const pj = persisted.hearing || {};
+                    const isPlaceholderTitle = !dbH.title || /^Høring\s+\d+$/i.test(String(dbH.title||''));
+                    const isUnknownStatus = !dbH.status || String(dbH.status||'').toLowerCase() === 'ukendt';
+                    if (isPlaceholderTitle && pj.title) dbH.title = pj.title;
+                    if (!dbH.startDate && pj.startDate) dbH.startDate = pj.startDate;
+                    if (!dbH.deadline && pj.deadline) dbH.deadline = pj.deadline;
+                    if (isUnknownStatus && pj.status) dbH.status = pj.status;
+                    fromDb.hearing = dbH;
+                }
+            } catch {}
             return res.json({ success: true, hearing: fromDb.hearing, totalPages: undefined, totalResponses: (fromDb.responses||[]).length, responses: fromDb.responses });
         }
         try {
