@@ -1,26 +1,61 @@
 #!/usr/bin/env node
 
-// Add parent node_modules to module search path for Render compatibility
+// Debug module paths on Render
+console.log('[COMBINED-CRON] Debug info:');
+console.log('- __dirname:', __dirname);
+console.log('- process.cwd():', process.cwd());
+console.log('- NODE_PATH:', process.env.NODE_PATH);
+
+// Add multiple possible node_modules paths for Render compatibility
 const Module = require('module');
+const path = require('path');
+const fs = require('fs');
+
+// List of possible node_modules locations on Render
+const possibleNodeModulePaths = [
+    path.join(__dirname, '../node_modules'),                    // /opt/render/project/src/node_modules
+    path.join(__dirname, '../../node_modules'),                 // /opt/render/project/node_modules
+    path.join(__dirname, '../../../node_modules'),              // /opt/render/node_modules
+    '/opt/render/project/node_modules',                         // Absolute path
+    '/opt/render/project/src/node_modules',                     // Alternative absolute path
+    '/opt/render/node_modules',                                 // Parent directory on Render
+    path.join(process.cwd(), 'node_modules'),                   // Current working directory
+    path.join(process.cwd(), '../node_modules'),                // Parent of CWD
+    path.join(process.cwd(), '../../node_modules')              // Grandparent of CWD
+];
+
+// Check which paths exist
+console.log('[COMBINED-CRON] Checking for node_modules in:');
+possibleNodeModulePaths.forEach(p => {
+    const exists = fs.existsSync(p);
+    console.log(`- ${p}: ${exists ? 'EXISTS' : 'not found'}`);
+    if (exists && fs.existsSync(path.join(p, 'axios'))) {
+        console.log(`  └─ axios found in ${p}`);
+    }
+});
+
+// Override module resolution to check multiple paths
 const originalResolveFilename = Module._resolveFilename;
 Module._resolveFilename = function (request, parent, isMain) {
     try {
         return originalResolveFilename.call(this, request, parent, isMain);
     } catch (e) {
-        // Try to resolve from parent directory's node_modules
-        const parentNodeModules = require('path').join(__dirname, '../../node_modules');
-        const alternativePath = require('path').join(parentNodeModules, request);
-        try {
-            return originalResolveFilename.call(this, alternativePath, parent, isMain);
-        } catch (e2) {
-            throw e; // Throw original error
+        // Try each possible node_modules path
+        for (const nodeModulesPath of possibleNodeModulePaths) {
+            try {
+                const modulePath = path.join(nodeModulesPath, request);
+                if (fs.existsSync(modulePath) || fs.existsSync(modulePath + '.js')) {
+                    return originalResolveFilename.call(this, modulePath, parent, isMain);
+                }
+            } catch (e2) {
+                // Continue to next path
+            }
         }
+        throw e; // Throw original error if nothing worked
     }
 };
 
 const axios = require('axios');
-const fs = require('fs');
-const path = require('path');
 
 // Initialize database - running from /opt/render/project/src with NODE_PATH set
 const sqlite = require('../db/sqlite');

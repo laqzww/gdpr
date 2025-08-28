@@ -117,7 +117,7 @@ jobs:
       npm rebuild better-sqlite3 --update-binary || true
     command: |
       cd /opt/render/project/src && \
-      NODE_PATH=/opt/render/project/node_modules node scripts/combined-cron.js
+      bash scripts/cron-job.sh
     envVars:
       - key: NODE_ENV
         value: production
