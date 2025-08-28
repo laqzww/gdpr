@@ -652,8 +652,8 @@
             `;}).join('');
             
             suggestionsDiv.style.display = 'block';
-            // Opportunistically hydrate any placeholder titles via fast meta endpoint
-            try { setTimeout(() => { hydrateSuggestionTitles(sorted); }, 0); } catch {}
+            // Disabled title hydration - we already have correct titles from search index
+            // try { setTimeout(() => { hydrateSuggestionTitles(sorted); }, 0); } catch {}
             
             // Disabled background preload to reduce API calls on low-tier hosting
         }
