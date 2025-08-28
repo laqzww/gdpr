@@ -1018,7 +1018,14 @@
                 if (j && j.success && (j.found || j.hearing)) {
                     const prevTitle = lastFetched && lastFetched.hearing && lastFetched.hearing.title;
                     lastFetched = { hearing: j.hearing, responses: j.responses || [], materials: [], uploads: [] };
-                    if (prevTitle) lastFetched.hearing.title = prevTitle;
+                    // Only keep previous title if new title is generic/bad
+                    if (prevTitle && lastFetched.hearing.title) {
+                        const newTitle = lastFetched.hearing.title;
+                        const isGenericTitle = /^Høring \d+$/.test(newTitle) || /^\d{4}-\d+$/.test(newTitle);
+                        if (isGenericTitle && !(/^Høring \d+$/.test(prevTitle) || /^\d{4}-\d+$/.test(prevTitle))) {
+                            lastFetched.hearing.title = prevTitle;
+                        }
+                    }
                     try { await applySavedEdits(); } catch {}
                     displayHearingInfo(lastFetched.hearing);
                     // If DB has no responses, fetch via crawler endpoint and persist
