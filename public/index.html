@@ -731,6 +731,13 @@
                         status,
                         deadlineIso
                     };
+                    
+                    // Store good title in sessionStorage for work.html
+                    if (title && !(/^Høring \d+$/.test(title) || /^\d{4}-\d+$/.test(title))) {
+                        try {
+                            sessionStorage.setItem(`hearing_title_${hearingId}`, title);
+                        } catch (e) {}
+                    }
                     break;
                 }
             }
@@ -822,8 +829,15 @@
         function proceedWithHearing() {
             if (selectedHearingForModal) {
                 const hearingId = selectedHearingForModal.id;
+                const title = selectedHearingForModal.title;
                 closeHearingModal();
                 showLoading(true);
+                // Store the good title in sessionStorage before navigation
+                if (title && !(/^Høring \d+$/.test(title) || /^\d{4}-\d+$/.test(title))) {
+                    try {
+                        sessionStorage.setItem(`hearing_title_${hearingId}`, title);
+                    } catch (e) {}
+                }
                 // Redirect to work page with hearing ID
                 window.location.href = `/work.html?id=${hearingId}`;
             }
