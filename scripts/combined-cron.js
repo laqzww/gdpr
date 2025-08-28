@@ -4,7 +4,7 @@ const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
 
-// Initialize database - fix the path since we run from /opt/render/project/src
+// Initialize database - running from /opt/render/project/src with NODE_PATH set
 const sqlite = require('../db/sqlite');
 
 console.log('[COMBINED-CRON] Starting combined cron job...');
