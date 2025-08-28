@@ -1,5 +1,23 @@
 #!/usr/bin/env node
 
+// Add parent node_modules to module search path for Render compatibility
+const Module = require('module');
+const originalResolveFilename = Module._resolveFilename;
+Module._resolveFilename = function (request, parent, isMain) {
+    try {
+        return originalResolveFilename.call(this, request, parent, isMain);
+    } catch (e) {
+        // Try to resolve from parent directory's node_modules
+        const parentNodeModules = require('path').join(__dirname, '../../node_modules');
+        const alternativePath = require('path').join(parentNodeModules, request);
+        try {
+            return originalResolveFilename.call(this, alternativePath, parent, isMain);
+        } catch (e2) {
+            throw e; // Throw original error
+        }
+    }
+};
+
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
