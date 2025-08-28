@@ -4940,14 +4940,18 @@ app.get('/api/db-status', (req, res) => {
             workingDir: process.cwd()
         };
         
-        if (sqliteDb && sqliteDb.prepare) {
+        // Get the current database instance from the module
+        const sqlite = require('./db/sqlite');
+        const currentDb = sqlite.db;
+        
+        if (currentDb && currentDb.prepare) {
             try {
                 status.dbExists = true;
-                status.hearingCount = sqliteDb.prepare('SELECT COUNT(*) as count FROM hearings').get().count;
-                status.responseCount = sqliteDb.prepare('SELECT COUNT(*) as count FROM responses').get().count;
-                status.materialCount = sqliteDb.prepare('SELECT COUNT(*) as count FROM materials').get().count;
+                status.hearingCount = currentDb.prepare('SELECT COUNT(*) as count FROM hearings').get().count;
+                status.responseCount = currentDb.prepare('SELECT COUNT(*) as count FROM responses').get().count;
+                status.materialCount = currentDb.prepare('SELECT COUNT(*) as count FROM materials').get().count;
                 
-                const lastUpdate = sqliteDb.prepare('SELECT MAX(updated_at) as last FROM hearings').get();
+                const lastUpdate = currentDb.prepare('SELECT MAX(updated_at) as last FROM hearings').get();
                 status.lastHearingUpdate = lastUpdate.last ? new Date(lastUpdate.last).toISOString() : null;
             } catch (e) {
                 status.error = e.message;
@@ -4956,7 +4960,9 @@ app.get('/api/db-status', (req, res) => {
         } else {
             status.error = 'Database not initialized';
             status.sqliteDb = !!sqliteDb;
+            status.currentDb = !!currentDb;
             status.sqliteDbPrepare = !!(sqliteDb && sqliteDb.prepare);
+            status.currentDbPrepare = !!(currentDb && currentDb.prepare);
         }
         
         res.json(status);

@@ -64,6 +64,23 @@ async function runDailyScrape() {
         const statusResp = await makeRequest(`${PUBLIC_URL}/api/db-status`);
         console.log('[COMBINED-CRON] Database status:', statusResp.data);
         
+        // If database is not initialized, try to reinitialize it
+        if (statusResp.data && statusResp.data.error === 'Database not initialized') {
+            console.log('[COMBINED-CRON] Database not initialized, attempting to reinitialize...');
+            const reinitResp = await makeRequest(`${PUBLIC_URL}/api/db-reinit`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            });
+            console.log('[COMBINED-CRON] Database reinit response:', reinitResp.status, reinitResp.data);
+            
+            // Check status again
+            await new Promise(resolve => setTimeout(resolve, 5000));
+            const newStatusResp = await makeRequest(`${PUBLIC_URL}/api/db-status`);
+            console.log('[COMBINED-CRON] Database status after reinit:', newStatusResp.data);
+        }
+        
         console.log('[COMBINED-CRON] Daily scrape completed');
     } catch (e) {
         console.error('[COMBINED-CRON] Daily scrape failed:', e.message);
