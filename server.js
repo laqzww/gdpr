@@ -1315,6 +1315,11 @@ async function warmHearingIndex() {
                     const cid = cref?.id && String(cref.id);
                     if (cid && titleByContentId.has(cid)) { title = titleByContentId.get(cid); break; }
                 }
+                // If no title found and no content relationships, use a placeholder
+                // The title will be fetched later via individual API calls if needed
+                if (!title && contentRels.length === 0) {
+                    title = ''; // Keep empty, will be handled later
+                }
                 const statusRelId = it.relationships?.hearingStatus?.data?.id;
                 const statusIncluded = included.find(inc => inc.type === 'hearingStatus' && String(inc.id) === String(statusRelId));
                 const statusText = statusIncluded?.attributes?.name || null;
@@ -1325,6 +1330,79 @@ async function warmHearingIndex() {
             if (page >= totalPages) break;
             page += 1;
         }
+        
+        // Fetch missing titles for hearings without content relationships
+        console.log('[warmHearingIndex] Checking for hearings with missing titles...');
+        const missingTitles = collected.filter(h => !h.title || h.title === '');
+        if (missingTitles.length > 0) {
+            console.log(`[warmHearingIndex] Found ${missingTitles.length} hearings with missing titles, fetching...`);
+            
+            // Fetch titles in batches to avoid overwhelming the server
+            const batchSize = 5;
+            for (let i = 0; i < missingTitles.length; i += batchSize) {
+                const batch = missingTitles.slice(i, i + batchSize);
+                await Promise.all(batch.map(async (hearing) => {
+                    try {
+                        // Try to get title from the hearing detail page
+                        const detailUrl = `${baseUrl}/api/hearing/${hearing.id}`;
+                        const detailResp = await axiosInstance.get(detailUrl);
+                        if (detailResp.status === 200 && detailResp.data) {
+                            // Try the same parsing logic as individual API
+                            const data = detailResp.data;
+                            const included = Array.isArray(data?.included) ? data.included : [];
+                            const contents = included.filter(x => x?.type === 'content');
+                            const titleContent = contents.find(c => 
+                                String(c?.relationships?.field?.data?.id || '') === '1' && 
+                                c?.attributes?.textContent
+                            );
+                            if (titleContent) {
+                                hearing.title = String(titleContent.attributes.textContent).trim();
+                                console.log(`[warmHearingIndex] Found title for hearing ${hearing.id}: ${hearing.title}`);
+                            }
+                        }
+                        
+                        // If still no title, try HTML scraping as last resort
+                        if (!hearing.title) {
+                            const htmlUrl = `${baseUrl}/hearing/${hearing.id}`;
+                            const htmlResp = await axiosInstance.get(htmlUrl);
+                            if (htmlResp.status === 200 && htmlResp.data) {
+                                // Extract title from __NEXT_DATA__
+                                const match = htmlResp.data.match(/<script id="__NEXT_DATA__"[^>]*>([^<]+)<\/script>/);
+                                if (match && match[1]) {
+                                    try {
+                                        const nextData = JSON.parse(match[1]);
+                                        const queries = nextData?.props?.pageProps?.dehydratedState?.queries || [];
+                                        for (const query of queries) {
+                                            const root = query?.state?.data?.data;
+                                            if (!root) continue;
+                                            const included = Array.isArray(root?.included) ? root.included : [];
+                                            const contents = included.filter(x => x?.type === 'content');
+                                            const titleContent = contents.find(c => 
+                                                String(c?.relationships?.field?.data?.id || '') === '1' && 
+                                                c?.attributes?.textContent
+                                            );
+                                            if (titleContent) {
+                                                hearing.title = String(titleContent.attributes.textContent).trim();
+                                                console.log(`[warmHearingIndex] Found title via HTML for hearing ${hearing.id}: ${hearing.title}`);
+                                                break;
+                                            }
+                                        }
+                                    } catch (e) {}
+                                }
+                            }
+                        }
+                    } catch (e) {
+                        console.warn(`[warmHearingIndex] Failed to fetch title for hearing ${hearing.id}:`, e.message);
+                    }
+                }));
+                
+                // Small delay between batches
+                if (i + batchSize < missingTitles.length) {
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                }
+            }
+        }
+        
         // Only include hearings with status "Afventer konklusion"
         hearingIndex = collected
             .filter(h => shouldIncludeInIndex(h.status))
