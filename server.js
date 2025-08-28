@@ -1217,26 +1217,8 @@ function computeIsOpen(statusText, deadline) {
 }
 
 function shouldIncludeInIndex(status) {
-    // Include all hearings except those that are explicitly closed/concluded
-    if (!status) return true;
-    const statusLower = status.toLowerCase();
-    
-    // Exclude only if explicitly closed/concluded
-    const excludePatterns = [
-        'afsluttet',
-        'lukket',
-        'konkluderet',
-        'arkiveret'
-    ];
-    
-    for (const pattern of excludePatterns) {
-        if (statusLower.includes(pattern)) {
-            return false;
-        }
-    }
-    
-    // Include everything else (including "Afventer konklusion", "Åben", "I gang", etc.)
-    return true;
+    // Only include hearings with status "Afventer konklusion" in the search index
+    return status && status.toLowerCase().includes('afventer konklusion');
 }
 
 function enrichHearingForIndex(h) {
@@ -1358,6 +1340,18 @@ async function warmHearingIndex() {
                             if (titleContent) {
                                 hearing.title = String(titleContent.attributes.textContent).trim();
                                 console.log(`[warmHearingIndex] Found title for hearing ${hearing.id}: ${hearing.title}`);
+                                // Update the database immediately
+                                try {
+                                    upsertHearing({ 
+                                        id: hearing.id, 
+                                        title: hearing.title, 
+                                        startDate: hearing.startDate, 
+                                        deadline: hearing.deadline, 
+                                        status: hearing.status 
+                                    });
+                                } catch (e) {
+                                    console.warn(`[warmHearingIndex] Failed to update hearing ${hearing.id} in DB:`, e.message);
+                                }
                             }
                         }
                         
@@ -1384,6 +1378,18 @@ async function warmHearingIndex() {
                                             if (titleContent) {
                                                 hearing.title = String(titleContent.attributes.textContent).trim();
                                                 console.log(`[warmHearingIndex] Found title via HTML for hearing ${hearing.id}: ${hearing.title}`);
+                                                // Update the database immediately
+                                                try {
+                                                    upsertHearing({ 
+                                                        id: hearing.id, 
+                                                        title: hearing.title, 
+                                                        startDate: hearing.startDate, 
+                                                        deadline: hearing.deadline, 
+                                                        status: hearing.status 
+                                                    });
+                                                } catch (e) {
+                                                    console.warn(`[warmHearingIndex] Failed to update hearing ${hearing.id} in DB:`, e.message);
+                                                }
                                                 break;
                                             }
                                         }
@@ -1404,9 +1410,17 @@ async function warmHearingIndex() {
         }
         
         // Only include hearings with status "Afventer konklusion"
-        hearingIndex = collected
-            .filter(h => shouldIncludeInIndex(h.status))
-            .map(enrichHearingForIndex);
+        console.log(`[warmHearingIndex] Total collected hearings: ${collected.length}`);
+        const withCorrectStatus = collected.filter(h => shouldIncludeInIndex(h.status));
+        console.log(`[warmHearingIndex] Hearings with status "Afventer konklusion": ${withCorrectStatus.length}`);
+        
+        // Check specific hearings
+        const h168 = collected.find(h => h.id === 168);
+        const h190 = collected.find(h => h.id === 190);
+        if (h168) console.log(`[warmHearingIndex] Hearing 168:`, { id: h168.id, title: h168.title, status: h168.status });
+        if (h190) console.log(`[warmHearingIndex] Hearing 190:`, { id: h190.id, title: h190.title, status: h190.status });
+        
+        hearingIndex = withCorrectStatus.map(enrichHearingForIndex);
         try {
             if (sqliteDb && sqliteDb.prepare) {
                 // Still save all hearings to DB, but only "Afventer konklusion" ones to index
