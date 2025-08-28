@@ -109,15 +109,10 @@ jobs:
     env: node
     schedule: "0 4 * * *"  # Runs daily at 4:00 AM UTC
     buildCommand: |
-      set -e
-      export PYTHONPATH="$PWD/python_packages"
-      mkdir -p python_packages
-      python3 -m pip install --no-cache-dir --no-warn-script-location --target python_packages setuptools==70.0.0 packaging wheel || true
-      PUPPETEER_SKIP_DOWNLOAD=true npm install --no-audit --no-fund
-      npm rebuild better-sqlite3 --update-binary || true
+      echo "No build needed for HTTP-based cron job"
     command: |
       cd /opt/render/project/src && \
-      bash scripts/cron-job.sh
+      bash scripts/cron-http.sh
     envVars:
       - key: NODE_ENV
         value: production
