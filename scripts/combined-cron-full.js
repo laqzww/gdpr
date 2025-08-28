@@ -61,8 +61,12 @@ async function rebuildSearchIndex() {
         await new Promise(resolve => setTimeout(resolve, 30000));
         
         // Check how many items are in the index now
-        const warmResp = await makeRequest(`${PUBLIC_URL}/api/warm-now`);
-        console.log('[COMBINED-CRON] Index status after rebuild:', warmResp.data);
+        const indexResp = await makeRequest(`${PUBLIC_URL}/api/hearing-index`);
+        console.log('[COMBINED-CRON] Index status after rebuild:', { 
+            success: indexResp.data?.success, 
+            count: indexResp.data?.hearings?.length || 0,
+            message: 'Index should now be populated'
+        });
         
     } catch (e) {
         console.error('[COMBINED-CRON] Search index rebuild failed:', e.message);

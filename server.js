@@ -5754,23 +5754,40 @@ async function refreshHearingUntilStable(hearingId) {
 
 async function listRefreshTargetHearings() {
     let ids = [];
-    try {
-        ids = hearingIndex
-            .filter(h => statusMatchesRefreshTargets(h.status))
-            .map(h => h.id);
-    } catch {}
-    if (!ids.length && sqliteDb && sqliteDb.prepare) {
+    
+    // Always check database first (more reliable for cron jobs)
+    if (sqliteDb && sqliteDb.prepare) {
         try {
-            const rows = sqliteDb.prepare(`SELECT id, status FROM hearings`).all();
+            const rows = sqliteDb.prepare(`SELECT id, status FROM hearings WHERE status IS NOT NULL`).all();
             ids = rows.filter(r => statusMatchesRefreshTargets(r.status)).map(r => r.id);
+            console.log(`[listRefreshTargetHearings] Found ${ids.length} hearings in DB with matching status`);
+        } catch (e) {
+            console.warn('[listRefreshTargetHearings] DB query failed:', e.message);
+        }
+    }
+    
+    // If no results from DB, try in-memory index
+    if (!ids.length) {
+        try {
+            ids = hearingIndex
+                .filter(h => statusMatchesRefreshTargets(h.status))
+                .map(h => h.id);
+            console.log(`[listRefreshTargetHearings] Found ${ids.length} hearings in memory index`);
         } catch {}
     }
+    
     return Array.from(new Set(ids)).filter(x => Number.isFinite(x));
 }
 
 app.post('/api/refresh/open', async (req, res) => {
     try {
         const ids = await listRefreshTargetHearings();
+        console.log(`[refresh/open] Found ${ids?.length || 0} hearings to refresh`);
+        
+        if (!ids || !Array.isArray(ids) || ids.length === 0) {
+            return res.json({ success: true, total: 0, refreshed: 0, results: [], message: 'No hearings to refresh' });
+        }
+        
         let idx = 0;
         let completed = 0;
         const results = [];
