@@ -1217,8 +1217,26 @@ function computeIsOpen(statusText, deadline) {
 }
 
 function shouldIncludeInIndex(status) {
-    // Only include hearings with status "Afventer konklusion" in the search index
-    return status && status.toLowerCase().includes('afventer konklusion');
+    // Include all hearings except those that are explicitly closed/concluded
+    if (!status) return true;
+    const statusLower = status.toLowerCase();
+    
+    // Exclude only if explicitly closed/concluded
+    const excludePatterns = [
+        'afsluttet',
+        'lukket',
+        'konkluderet',
+        'arkiveret'
+    ];
+    
+    for (const pattern of excludePatterns) {
+        if (statusLower.includes(pattern)) {
+            return false;
+        }
+    }
+    
+    // Include everything else (including "Afventer konklusion", "Åben", "I gang", etc.)
+    return true;
 }
 
 function enrichHearingForIndex(h) {
