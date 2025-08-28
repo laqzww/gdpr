@@ -3,7 +3,9 @@
     "version": "1.0.0",
     "description": "",
     "main": "server.js",
-    "engines": { "node": "20.19.4" },
+    "engines": {
+        "node": "20.19.4"
+    },
     "scripts": {
         "test": "echo \"Error: no test specified\" && exit 1",
         "postinstall": "node -e \"try{const D=require('better-sqlite3');new D(':memory:');process.exit(0)}catch(e){process.exit(1)}\" || npm rebuild better-sqlite3 --update-binary || true",
@@ -23,9 +25,10 @@
         "@aws-sdk/s3-request-presigner": "^3.58.0",
         "archiver": "^5.3.1",
         "axios": "^0.21.4",
-        "better-sqlite3": "^9.4.3",
+        "better-sqlite3": "^9.6.0",
         "cheerio": "^1.0.0-rc.12",
         "cors": "^2.8.5",
+        "docx": "^8.5.0",
         "dotenv": "^16.3.1",
         "express": "^4.17.1",
         "express-session": "^1.18.2",
@@ -33,8 +36,6 @@
         "fs-extra": "^11.1.1",
         "multer": "^1.4.5-lts.1",
         "node-cron": "^3.0.2",
-        "openai": "^4.52.0",
-        "docx": "^8.5.0"
+        "openai": "^4.52.0"
     }
-
 }

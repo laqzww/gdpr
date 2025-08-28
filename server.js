@@ -1216,6 +1216,11 @@ function computeIsOpen(statusText, deadline) {
     return false;
 }
 
+function shouldIncludeInIndex(status) {
+    // Only include hearings with status "Afventer konklusion" in the search index
+    return status && status.toLowerCase().includes('afventer konklusion');
+}
+
 function enrichHearingForIndex(h) {
     const normalizedTitle = normalizeDanish(h.title || '');
     const titleTokens = tokenize(h.title || '');
@@ -1302,11 +1307,19 @@ async function warmHearingIndex() {
             if (page >= totalPages) break;
             page += 1;
         }
-        hearingIndex = collected.map(enrichHearingForIndex);
+        // Only include hearings with status "Afventer konklusion"
+        hearingIndex = collected
+            .filter(h => shouldIncludeInIndex(h.status))
+            .map(enrichHearingForIndex);
         try {
             if (sqliteDb && sqliteDb.prepare) {
-                for (const h of hearingIndex) {
+                // Still save all hearings to DB, but only "Afventer konklusion" ones to index
+                for (const h of collected) {
                     try { upsertHearing({ id: h.id, title: h.title || `Høring ${h.id}`, startDate: h.startDate || null, deadline: h.deadline || null, status: h.status || null }); } catch {}
+                }
+                // Update hearing index in SQLite
+                if (sqliteDb.updateHearingIndex) {
+                    try { sqliteDb.updateHearingIndex(hearingIndex); } catch (e) { console.warn('Failed to update hearing index:', e.message); }
                 }
             }
         } catch {}
@@ -1718,14 +1731,26 @@ app.get('/api/hearing-index', async (req, res) => {
         // DB-first: always prefer current SQLite state
         try {
             const sqlite = require('./db/sqlite');
-            if (sqlite && sqlite.db && sqlite.db.prepare) {
-                let rows;
-                if (statusLike) {
-                    rows = sqlite.db.prepare(`SELECT id,title,start_date as startDate,deadline,status FROM hearings WHERE archived IS NOT 1 AND LOWER(status) LIKE '%' || ? || '%'`).all(statusLike);
-                } else {
-                    rows = sqlite.db.prepare(`SELECT id,title,start_date as startDate,deadline,status FROM hearings WHERE archived IS NOT 1`).all();
+            if (sqlite && sqlite.getHearingIndex) {
+                // Try to use hearing_index table first if available
+                try {
+                    const indexRows = sqlite.getHearingIndex();
+                    if (indexRows && indexRows.length > 0) {
+                        hearingIndex = indexRows;
+                    }
+                } catch (_) {}
+            }
+            // Fallback to hearings table if hearing_index is empty
+            if (!hearingIndex || hearingIndex.length === 0) {
+                if (sqlite && sqlite.db && sqlite.db.prepare) {
+                    let rows;
+                    if (statusLike) {
+                        rows = sqlite.db.prepare(`SELECT id,title,start_date as startDate,deadline,status FROM hearings WHERE archived IS NOT 1 AND LOWER(status) LIKE '%' || ? || '%'`).all(statusLike);
+                                    } else {
+                    rows = sqlite.db.prepare(`SELECT id,title,start_date as startDate,deadline,status FROM hearings WHERE archived IS NOT 1 AND LOWER(status) LIKE '%afventer konklusion%'`).all();
                 }
-                hearingIndex = (rows || []).map(enrichHearingForIndex);
+                    hearingIndex = (rows || []).map(enrichHearingForIndex);
+                }
             }
         } catch (_) {}
 
@@ -1779,9 +1804,9 @@ app.get('/api/hearing-index', async (req, res) => {
                     let rows;
                     if (statusLike) {
                         rows = sqlite.db.prepare(`SELECT id,title,start_date as startDate,deadline,status FROM hearings WHERE archived IS NOT 1 AND LOWER(status) LIKE '%' || ? || '%'`).all(statusLike);
-                    } else {
-                        rows = sqlite.db.prepare(`SELECT id,title,start_date as startDate,deadline,status FROM hearings WHERE archived IS NOT 1`).all();
-                    }
+                                    } else {
+                    rows = sqlite.db.prepare(`SELECT id,title,start_date as startDate,deadline,status FROM hearings WHERE archived IS NOT 1 AND LOWER(status) LIKE '%afventer konklusion%'`).all();
+                }
                     hearingIndex = (rows || []).map(enrichHearingForIndex);
                 }
             } catch (_) {}
@@ -2384,11 +2409,35 @@ function extractMetaFromNextJson(jsonRoot) {
             if (hearingObj && hearingObj.attributes) {
                 deadline = hearingObj.attributes.deadline || deadline;
                 startDate = hearingObj.attributes.startDate || startDate;
+                // Try to get title directly from attributes if available
+                if (hearingObj.attributes.title && !title) {
+                    title = fixEncoding(String(hearingObj.attributes.title).trim());
+                }
             }
             const included = Array.isArray(envelope?.included) ? envelope.included : [];
             const contents = included.filter(x => x?.type === 'content');
-            const titleContent = contents.find(c => String(c?.relationships?.field?.data?.id || '') === '1' && c?.attributes?.textContent);
-            if (titleContent) title = fixEncoding(String(titleContent.attributes.textContent).trim());
+            
+            // Look for title in content fields - try multiple field IDs
+            if (!title) {
+                // Field ID 1 is typically the title
+                const titleContent = contents.find(c => String(c?.relationships?.field?.data?.id || '') === '1' && c?.attributes?.textContent);
+                if (titleContent) title = fixEncoding(String(titleContent.attributes.textContent).trim());
+            }
+            
+            // Fallback: look for any content field that looks like a title
+            if (!title) {
+                for (const content of contents) {
+                    if (content?.attributes?.textContent) {
+                        const text = String(content.attributes.textContent).trim();
+                        // Title is typically shorter than 200 chars and doesn't contain multiple paragraphs
+                        if (text.length > 0 && text.length < 200 && !text.includes('\n\n')) {
+                            title = fixEncoding(text);
+                            break;
+                        }
+                    }
+                }
+            }
+            
             const statusRelId = hearingObj?.relationships?.hearingStatus?.data?.id;
             const statusIncluded = included.find(inc => inc.type === 'hearingStatus' && String(inc.id) === String(statusRelId));
             status = statusIncluded?.attributes?.name || status;
@@ -5267,7 +5316,10 @@ server.listen(PORT, () => {
                         console.log('[CRON] Starting hearing refresh job');
                         const base = (process.env.PUBLIC_URL || '').trim() || `http://localhost:${PORT}`;
                         
-                        // First, warm the hearing index
+                        // First, warm the hearing index - this will:
+                        // 1. Fetch all hearings from API
+                        // 2. Only include ones with status "Afventer konklusion"
+                        // 3. Update hearing_index table in SQLite with proper titles
                         await warmHearingIndex();
                         
                         // Then refresh hearings marked as 'Afventer konklusion'

@@ -291,6 +291,52 @@ function setHearingArchived(hearingId, archived) {
     db.prepare(`UPDATE hearings SET archived=?, updated_at=? WHERE id=?`).run(archived ? 1 : 0, now, hearingId);
 }
 
+function updateHearingIndex(hearingIndexData) {
+    const now = Date.now();
+    const tx = db.transaction(() => {
+        // Clear existing index
+        db.prepare(`DELETE FROM hearing_index`).run();
+        
+        // Insert new index entries
+        const stmt = db.prepare(`
+            INSERT INTO hearing_index(id, title, start_date, deadline, status, normalized_title, title_tokens, deadline_ts, is_open, updated_at)
+            VALUES (@id, @title, @startDate, @deadline, @status, @normalizedTitle, @titleTokens, @deadlineTs, @isOpen, @now)
+        `);
+        
+        for (const hearing of hearingIndexData) {
+            stmt.run({
+                id: hearing.id,
+                title: hearing.title || `Høring ${hearing.id}`,
+                startDate: hearing.startDate,
+                deadline: hearing.deadline,
+                status: hearing.status,
+                normalizedTitle: hearing.normalizedTitle,
+                titleTokens: JSON.stringify(hearing.titleTokens || []),
+                deadlineTs: hearing.deadlineTs,
+                isOpen: hearing.isOpen ? 1 : 0,
+                now
+            });
+        }
+    });
+    tx();
+}
+
+function getHearingIndex() {
+    const rows = db.prepare(`
+        SELECT id, title, start_date as startDate, deadline, status, 
+               normalized_title as normalizedTitle, title_tokens as titleTokens,
+               deadline_ts as deadlineTs, is_open as isOpen
+        FROM hearing_index
+        ORDER BY deadline_ts ASC, id ASC
+    `).all();
+    
+    return rows.map(row => ({
+        ...row,
+        titleTokens: row.titleTokens ? JSON.parse(row.titleTokens) : [],
+        isOpen: !!row.isOpen
+    }));
+}
+
 function listHearingsByStatusLike(statusLike) {
     const s = `%${String(statusLike || '').toLowerCase()}%`;
     return db.prepare(`SELECT id,title,start_date as startDate,deadline,status FROM hearings WHERE archived IS NOT 1 AND LOWER(status) LIKE ? ORDER BY deadline ASC, id ASC`).all(s);
@@ -432,7 +478,9 @@ const api = {
     setMaterialFlag,
     getMaterialFlags,
     addUpload,
-    listUploads
+    listUploads,
+    updateHearingIndex,
+    getHearingIndex
 };
 Object.defineProperty(api, 'db', { get: () => db });
 module.exports = api;
