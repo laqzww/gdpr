@@ -105,9 +105,9 @@ services:
 
 jobs:
   - type: cron
-    name: blivhort-ai-hearing-refresh
+    name: blivhort-ai-daily-cron
     env: node
-    schedule: "*/30 * * * *"
+    schedule: "0 4 * * *"  # Runs daily at 4:00 AM UTC
     buildCommand: |
       set -e
       export PYTHONPATH="$PWD/python_packages"
@@ -117,94 +117,7 @@ jobs:
       npm rebuild better-sqlite3 --update-binary || true
     command: |
       cd /opt/render/project/src && \
-      node -e "
-      const axios = require('axios');
-      const fs = require('fs');
-      const path = require('path');
-      
-      console.log('[JOB] Starting hearing refresh job...');
-      
-      // Initialize database
-      const { init: initDb, db: sqliteDb } = require('./db/sqlite');
-      try {
-        initDb();
-        console.log('[JOB] Database initialized');
-      } catch (e) {
-        console.error('[JOB] Database init failed:', e);
-        process.exit(1);
-      }
-      
-      async function refreshHearings() {
-        try {
-          // First warm the index
-          console.log('[JOB] Warming hearing index...');
-          const baseApi = 'https://blivhoert.kk.dk/api/hearing';
-          let page = 1;
-          const pageSize = 50;
-          const collected = [];
-          
-          for (;;) {
-            const url = \`\${baseApi}?PageIndex=\${page}&PageSize=\${pageSize}\`;
-            const r = await axios.get(url, { validateStatus: () => true });
-            if (r.status !== 200 || !r.data) break;
-            const items = Array.isArray(r.data?.data) ? r.data.data : [];
-            if (items.length === 0) break;
-            collected.push(...items);
-            page++;
-          }
-          
-          console.log(\`[JOB] Found \${collected.length} hearings\`);
-          
-          // Update database
-          if (sqliteDb && sqliteDb.prepare) {
-            for (const h of collected) {
-              try {
-                sqliteDb.prepare('INSERT OR REPLACE INTO hearings(id, title, start_date, deadline, status, updated_at) VALUES (?,?,?,?,?,?)').run(
-                  h.id, h.title, h.startDate, h.deadline, h.status, Date.now()
-                );
-              } catch (e) {
-                console.error(\`[JOB] Failed to upsert hearing \${h.id}:\`, e.message);
-              }
-            }
-          }
-          
-          // Refresh pending hearings
-          const pendingHearings = sqliteDb.prepare(\`
-            SELECT id FROM hearings 
-            WHERE archived IS NOT 1 
-            AND LOWER(status) LIKE '%afventer konklusion%'
-            ORDER BY updated_at ASC
-            LIMIT 20
-          \`).all();
-          
-          console.log(\`[JOB] Found \${pendingHearings.length} pending hearings to refresh\`);
-          
-          const base = process.env.PUBLIC_URL || 'https://blivhort-ai.onrender.com';
-          for (const hearing of pendingHearings) {
-            try {
-              const resp = await axios.post(\`\${base}/api/prefetch/\${hearing.id}?apiOnly=1\`, 
-                { reason: 'cron_refresh' }, 
-                { validateStatus: () => true, timeout: 60000 }
-              );
-              console.log(\`[JOB] Refreshed hearing \${hearing.id}: \${resp.status}\`);
-              await new Promise(resolve => setTimeout(resolve, 2000)); // Rate limit
-            } catch (e) {
-              console.error(\`[JOB] Failed to refresh hearing \${hearing.id}:\`, e.message);
-            }
-          }
-          
-          console.log('[JOB] Hearing refresh completed');
-        } catch (e) {
-          console.error('[JOB] Refresh failed:', e);
-          process.exit(1);
-        }
-      }
-      
-      refreshHearings().then(() => process.exit(0)).catch(e => {
-        console.error('[JOB] Fatal error:', e);
-        process.exit(1);
-      });
-      "
+      node scripts/combined-cron.js
     envVars:
       - key: NODE_ENV
         value: production
@@ -216,65 +129,3 @@ jobs:
         value: "https://blivhort-ai.onrender.com"
       - key: PYTHONPATH
         value: "/opt/render/project/src/fetcher/python_packages:/opt/render/project/src/python_packages"
-      - key: OPENAI_API_KEY
-        sync: false
-
-  - type: cron
-    name: blivhort-ai-daily-scrape
-    env: node
-    schedule: "0 3 * * *"
-    buildCommand: |
-      set -e
-      export PYTHONPATH="$PWD/python_packages"
-      mkdir -p python_packages
-      python3 -m pip install --no-cache-dir --no-warn-script-location --target python_packages setuptools==70.0.0 packaging wheel || true
-      PUPPETEER_SKIP_DOWNLOAD=true npm install --no-audit --no-fund
-      npm rebuild better-sqlite3 --update-binary || true
-    command: |
-      cd /opt/render/project/src && \
-      node -e "
-      const axios = require('axios');
-      console.log('[JOB] Starting daily scrape job...');
-      
-      async function runDailyScrape() {
-        try {
-          const base = process.env.PUBLIC_URL || 'https://blivhort-ai.onrender.com';
-          const resp = await axios.post(\`\${base}/api/run-daily-scrape\`, 
-            { reason: 'scheduled_daily' }, 
-            { validateStatus: () => true, timeout: 300000 }
-          );
-          console.log('[JOB] Daily scrape response:', resp.status, resp.data);
-          
-          // Wait for it to complete
-          await new Promise(resolve => setTimeout(resolve, 60000));
-          
-          // Check database status
-          const statusResp = await axios.get(\`\${base}/api/db-status\`);
-          console.log('[JOB] Database status:', statusResp.data);
-        } catch (e) {
-          console.error('[JOB] Daily scrape failed:', e.message);
-          process.exit(1);
-        }
-      }
-      
-      runDailyScrape().then(() => {
-        console.log('[JOB] Daily scrape completed successfully');
-        process.exit(0);
-      }).catch(e => {
-        console.error('[JOB] Fatal error:', e);
-        process.exit(1);
-      });
-      "
-    envVars:
-      - key: NODE_ENV
-        value: production
-      - key: DB_PATH
-        value: "/opt/render/project/src/fetcher/data/app.sqlite"
-      - key: RENDER
-        value: "true"
-      - key: PUBLIC_URL
-        value: "https://blivhort-ai.onrender.com"
-      - key: PYTHONPATH
-        value: "/opt/render/project/src/fetcher/python_packages:/opt/render/project/src/python_packages"
-      - key: OPENAI_API_KEY
-        sync: false
