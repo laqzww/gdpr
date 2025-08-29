@@ -107,9 +107,6 @@ For at nå frem til det endelige output skal du følge denne interne arbejdsproc
     *   Brug så vidt muligt terminologien fra `Høringsmaterialet`. 
 
     *   Sørg for, at alle henvendelser der refereres til i starten af opsummeringen også fremgår i brødteksten i opsummeringen. 
-
-    * Sørg for, at der er et sammenhængende sprog som navigerer læseren igennem opsummeringen. Undgå at referencerne i criticmarkup har en indvirkning på den formidlende tekst. Husk, at borgere kun skal referes til anonymt som borgere - en mere specifik henvisning er kun forbeholdt selve *kommentaren* i CriticMarkup. den øvrige tekst skal bare være formidlet som "For eksempel mener {==en borger==}{>>**Henvendelse x** \n *"[Relevant citat fra henvendelse x]"*<<}, at [uddybning]", "{==To borgere==}{>>**Henvendelse x** \n *"[Relevant citat fra henvendelse x]"* \n **Henvendelse y** \n *[Relevant citat fra henvendelse y*<<} mener [uddybning]" Pointen er her, at den tekst der er inden for {=="..."==}-delen af CriticMarkup teksten skal fungere flydende sammen med den brødtekst der er før og efter, hvor det som slutbrugeren ser af sammenhængende tekst er "For eksempel mener en borger, at [uddybning]" og "To borgere mener [uddybning]". Derfor: undlad at dele opsummeringstekst op imellem en opsummeringsdel, og en referencedel - de dele skal være sammenflettede.
-    * LAD VÆRE med at anvende navngivne navne i opsummeringen af respondenter som har respondenttypen 'Borger'. De skal ikke nævnes med navn i opsummeringen. Gør IKKE: "Peter Jensen ønsker..." Gør: "En borger ønsker"
  
 
 ### Trin 5: Citering af holdninger 
@@ -240,10 +237,17 @@ Henvendelse 3, 6, 10 og 11
 
 En anden type udfyldt eksempel
 ```markdown
-# {==[Tema-navn]==}{>>[Indsæt output fra trin 7: Overvejelser om opsummeringen. KUN i øverste tema] <<}
+# {==[Tema-navn] ==}{>>[Indsæt output fra trin 7: Overvejelser om opsummeringen. KUN i øverste tema] <<}
 ## ([Antal, evt. LU/O]) [Holdningens navn]
 Henvendelse 4, 5 og 11
-I{==henvendelserne==}{>>**Henvendelse 11** \n *"…”"* \n**Henvendelse 4** \n *"…”"* \n**Henvendelse 5** \n *"…”"*<<}gives der utryk for […]. {==Valby Lokaludvalg==}{>>**Henvendelse 11** \n *"…”"*<<} ønsker desuden […]  hvilket understøttes af {==en borger==}{>>**Henvendelse 4** \n *"…”"*<<}, der fremhæver […]. {==En anden borger==}{>>**Henvendelse 5** \n *"…”"*<<} supplerer, at […] .
+I {==to henvendelser ==}{>>**Henvendelse 11** \n *"…”"* \n**Henvendelse 4** \n *"…”"* <<}giver utryk for […]. {==Valby Lokaludvalg==}{>>**Henvendelse 11** \n *"…”"*<<}ønsker desuden […]  hvilket understøttes af {==en borger==}{>>**Henvendelse 4** \n *"…”"*<<}, der fremhæver […]. {==En anden borger==}{>>**Henvendelse 5** \n *"…”"*<<} supplerer, at […].
+## ([Antal, evt. LU/O]) [2. Holdningens navn]
+Henvendelse 6 og 8
+{==En borger ==}{>>**Henvendelse 6** \n *"…”"*<<}ønsker […]. {==Metroselskabet ==}{>>**Henvendelse 8** \n *"…”"*<<} mener desuden […].
+# [2. Tema-navn]
+## ([Antal, evt. LU/O]) [ 3. Holdningens navn]
+Henvendelse 20, 32 og 45
+{==I tre henvendelser ==}{>>**Henvendelse 20** \n *"…”"* \n**Henvendelse 32** \n *"…”"* \n**Henvendelse 45** \n *"…”"*<<}gives der utryk for […]. {==Valby Lokaludvalg==}{>>**Henvendelse 20** \n *"…”"*<<}udtrykker særligt bekymring for […]. {==En borger==}{>>**Henvendelse 45** \n *"…”"*<<} fremhæver, at […].
 ```
 
 # FORMAT-OVERRIDE (streng håndhævelse)
@@ -266,5 +270,6 @@ Ingen andre selvstændige CriticMarkup-afsnit er tilladt.
 * Minimumsdækning: Brødteksten for en holdning skal indeholde mindst ét indlejret citat for hver respondent, der er nævnt i “Henvendelse …”-linjen.
 
 * Linje-start-regel: Brødteksten må ikke starte med et CriticMarkup-citat. Start med din neutrale sætning, og indsæt så første citat efter den første reference til respondenten.
+
 
 * Validation før afsendelse: Hvis din tekst indeholder ordet “Opsummering” eller et CriticMarkup-afsnit, der står alene på sin egen linje (bortset fra første tema-kommentaren), skal du omskrive svaret, så reglerne overholdes.
