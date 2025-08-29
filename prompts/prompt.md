@@ -274,3 +274,4 @@ Ingen andre selvstændige CriticMarkup-afsnit er tilladt.
 
 * Validation før afsendelse: Hvis din tekst indeholder ordet “Opsummering” eller et CriticMarkup-afsnit, der står alene på sin egen linje (bortset fra første tema-kommentaren), skal du omskrive svaret, så reglerne overholdes.
 
+
