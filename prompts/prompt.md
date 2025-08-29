@@ -264,7 +264,7 @@ Henvendelse 20, 32 og 45
 
 * Som kommentar på første tema-titel: {>>Overvejelser om opsummeringen …<<}.
 
-* Som indlejrede citater inde i brødteksten for hver holdning.
+* Som indlejrede citater inde i brødteksten for opsummeringerne.
 Ingen andre selvstændige CriticMarkup-afsnit er tilladt.
 
 * Minimumsdækning: Brødteksten for en holdning skal indeholde mindst ét indlejret citat for hver respondent, der er nævnt i “Henvendelse …”-linjen.
@@ -273,3 +273,4 @@ Ingen andre selvstændige CriticMarkup-afsnit er tilladt.
 
 
 * Validation før afsendelse: Hvis din tekst indeholder ordet “Opsummering” eller et CriticMarkup-afsnit, der står alene på sin egen linje (bortset fra første tema-kommentaren), skal du omskrive svaret, så reglerne overholdes.
+
