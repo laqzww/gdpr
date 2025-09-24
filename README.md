@@ -1,6 +1,26 @@
 # Høringsdata Henter
 
-En web-applikation til at hente høringssvar fra Københavns Kommunes "Bliv Hørt" platform.
+En web-applikation, der indsamler høringssvar fra Københavns Kommunes "Bliv Hørt" platform og gør dem lette at filtrere, analysere og opsummere.
+
+## Arkitektur og hosting (overblik)
+
+- **Render Web Service** – Applikationen drives som en Node-baseret webservice på Render (`blivhort-ai`) med en startkommando, der bootstraper Express-serveren, klargør cache-mapper og sørger for Node 20-runtime på alle miljøer.
+- **Vedvarende lagring** – Render-miljøet er knyttet til et persistent disk-mount (`app-data`), der bruges til SQLite-databasen og til at gemme cachede uploads og materialer mellem deployment-sessioner.
+- **Planlagte baggrundskørsler** – En Render-cron job (`blivhort-ai-daily-cron`) udfører HTTP-baserede warmup-scripts, så søgeindeks, materialer og høringssvar forbliver opdaterede uden manuel indgriben.
+- **REST API + statisk frontend** – Express-serveren (`server.js`) leverer både JSON-API'er til data/AI-funktioner og den statiske frontend i `public/`.
+
+## Dataflow fra Bliv Hørt
+
+- **Primær datahentning via JSON API** – Backend indlæser løbende høringer fra `https://blivhoert.kk.dk/api/hearing`, paginerer gennem alle sider og normaliserer metadata (titel, status, deadlines) til lokale indeks og SQLite-cache.
+- **Fallback til hydrering af Next.js-data** – Hvis API'et mangler felter som titler eller materialelister, henter serveren den offentlige høringsside, udtrækker `__NEXT_DATA__` og rekonstruerer materialer, beskrivelser og vedhæftede filer herfra.
+- **Materiale- og svarpersistens** – Ved prefetch gemmes både svar og materialer i den lokale database for hurtige svartider, og periodiske refresh-jobs sikrer, at åbne høringer løbende opdateres.
+- **Filproxy med API-nøgle-support** – `/api/file-proxy` endpointet forsøger flere downloadstier til Bliv Hørts filservere og kan sende både query-parametre og HTTP-headere med en BLIWHOERT API-nøgle eller cookie for at åbne ellers beskyttede dokumenter. En gyldig API-nøgle eliminerer 403-fejl og gør det muligt at hente vedhæftede PDF-, DOCX- eller regneark direkte i brugergrænsefladen.
+
+## AI-funktioner
+
+- **Høringsopsummeringer** – `/api/summarize/:id` opbygger prompts af høringsmaterialer og svar og streamer flere opsummeringsvarianter fra OpenAI-modeller (konfigureret via `OPENAI_API_KEY`, `MODEL_ID`, m.fl.). Hvis nøglen mangler, vendes tydelige fejl tilbage til klienten.
+- **Automatisk respondentklassifikation** – `/api/auto-classify-respondents/:id` bruger en specialiseret prompt til at foreslå respondenttyper og -navne baseret på svarenes metadata og indhold, så sagsbehandlere kan få strukturerede lister hurtigt.
+- **DOCX-generering** – `/api/build-docx` kombinerer AI-output med skabeloner (via `python-docx`/`docx` biblioteker) for at producere downloadbare høringsresuméer eller svaroversigter i Office-format.
 
 ## Funktioner
 
