@@ -278,13 +278,28 @@ try {
     console.error('[Server] SQLite init failed:', e.message);
     console.error('[Server] Full error:', e);
 }
-app.use(session({
-    store: SQLiteStore ? (SQLiteStore.length === 1
+
+// Session setup with error handling
+let sessionStore = undefined;
+try {
+    if (SQLiteStore) {
+        console.log('[Server] Setting up SQLite session store...');
+        sessionStore = SQLiteStore.length === 1
         ? new SQLiteStore({ 
             db: (process.env.SESSION_DB || 'sessions.sqlite'), 
             dir: process.env.DB_PATH ? path.dirname(process.env.DB_PATH) : path.join(__dirname, 'data') 
           })
-        : new SQLiteStore({ client: sqliteDb, cleanupInterval: 900000 })) : undefined,
+            : new SQLiteStore({ client: sqliteDb, cleanupInterval: 900000 });
+        console.log('[Server] SQLite session store created successfully');
+    }
+} catch (e) {
+    console.error('[Server] Failed to create SQLite session store:', e.message);
+    console.error('[Server] Continuing with MemoryStore (sessions will not persist)');
+    sessionStore = undefined;
+}
+
+app.use(session({
+    store: sessionStore,
     secret: process.env.SESSION_SECRET || 'dev-secret',
     resave: false,
     saveUninitialized: true,
