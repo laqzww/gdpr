@@ -6,12 +6,13 @@ services:
     buildCommand: |
       set -e
       export PYTHONPATH="$PWD/python_packages"
+      export npm_config_build_from_source=true
+      export npm_config_python=/usr/bin/python3
       mkdir -p python_packages
       python3 -m pip install --no-cache-dir --no-warn-script-location --target python_packages setuptools==70.0.0 packaging wheel || true
       PUPPETEER_SKIP_DOWNLOAD=true npm install --no-audit --no-fund
-      npm rebuild better-sqlite3 --update-binary || true
-      # Disable source builds on Render since distutils may be missing; prefer prebuilt
-      :
+      # Force native rebuild for current Node ABI
+      npm rebuild better-sqlite3 --build-from-source --unsafe-perm || true
       if [ -f requirements.txt ]; then \
         python3 -m pip install --no-cache-dir --no-warn-script-location --prefer-binary --only-binary=:all: --target python_packages -r requirements.txt; \
       else \
@@ -39,7 +40,7 @@ services:
       - key: NODE_VERSION
         value: 20.19.4
       - key: NPM_CONFIG_BUILD_FROM_SOURCE
-        value: "false"
+        value: "true"
       - key: PIP_USER
         value: "0"
       - key: PYTHONPATH
@@ -51,7 +52,7 @@ services:
       - key: SETUPTOOLS_USE_DISTUTILS
         value: "local"
       - key: ALLOW_RUNTIME_SQLITE_REBUILD
-        value: "0"
+        value: "1"
       - key: YARN_ENABLE_IMMUTABLE_INSTALLS
         value: "false"
       - key: OPENAI_API_KEY

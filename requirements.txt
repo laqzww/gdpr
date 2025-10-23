@@ -1,3 +1,2 @@
-python-docx==1.2.0
-lxml==5.2.2
-Pillow>=8.4.0
+# Empty on purpose: Python deps are vendored in ./python_packages for Render
+# Avoids 'pip install --user' failure inside Render's virtualenv
