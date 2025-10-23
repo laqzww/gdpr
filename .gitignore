@@ -20,6 +20,7 @@ tmp/
 server.log
 server.out
 hearings-cache.json
+.server.pid
 
 
 # SQLite
