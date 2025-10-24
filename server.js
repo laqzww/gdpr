@@ -29,7 +29,36 @@ let SQLiteStore;
 try { SQLiteStore = require('connect-sqlite3')(session); }
 catch (_) { SQLiteStore = null; }
 const cron = require('node-cron');
-const { init: initDb, db: sqliteDb, upsertHearing, replaceResponses, replaceMaterials, readAggregate, getSessionEdits, upsertSessionEdit, setMaterialFlag, getMaterialFlags, addUpload, listUploads, markHearingComplete, isHearingComplete, setHearingArchived, listHearingsByStatusLike, listAllHearingIds } = require('./db/sqlite');
+
+// Wrap db/sqlite require in try-catch to handle better-sqlite3 load failures gracefully
+let initDb, sqliteDb, upsertHearing, replaceResponses, replaceMaterials, readAggregate, getSessionEdits, upsertSessionEdit, setMaterialFlag, getMaterialFlags, addUpload, listUploads, markHearingComplete, isHearingComplete, setHearingArchived, listHearingsByStatusLike, listAllHearingIds;
+try {
+    const sqlite = require('./db/sqlite');
+    ({ init: initDb, db: sqliteDb, upsertHearing, replaceResponses, replaceMaterials, readAggregate, getSessionEdits, upsertSessionEdit, setMaterialFlag, getMaterialFlags, addUpload, listUploads, markHearingComplete, isHearingComplete, setHearingArchived, listHearingsByStatusLike, listAllHearingIds } = sqlite);
+    console.log('[Server] SQLite module loaded successfully');
+} catch (e) {
+    console.error('[Server] CRITICAL: Failed to load SQLite module:', e.message);
+    console.error('[Server] Stack:', e.stack);
+    console.error('[Server] Server will continue but database features will not work');
+    // Create stub functions so server can continue
+    initDb = () => { console.warn('[Server] SQLite not available - initDb is a no-op'); };
+    sqliteDb = null;
+    upsertHearing = () => {};
+    replaceResponses = () => {};
+    replaceMaterials = () => {};
+    readAggregate = () => null;
+    getSessionEdits = () => ({});
+    upsertSessionEdit = () => {};
+    setMaterialFlag = () => {};
+    getMaterialFlags = () => ({});
+    addUpload = () => {};
+    listUploads = () => [];
+    markHearingComplete = () => {};
+    isHearingComplete = () => ({ complete: false });
+    setHearingArchived = () => {};
+    listHearingsByStatusLike = () => [];
+    listAllHearingIds = () => [];
+}
 
 // OpenAI client (optional). If library or key is missing, summarization endpoints will return an error.
 const openai = OpenAILib && (process.env.OPENAI_API_KEY || process.env.OPENAI_APIKEY || process.env.OPENAI_KEY)
