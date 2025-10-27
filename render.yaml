@@ -12,17 +12,28 @@ services:
       export npm_config_python=/usr/bin/python3
       mkdir -p python_packages
       python3 -m pip install --no-cache-dir --no-warn-script-location --target python_packages setuptools==70.0.0 packaging wheel || true
-      PUPPETEER_SKIP_DOWNLOAD=true npm install --no-audit --no-fund
-      # Force native rebuild for current Node ABI
-      npm rebuild better-sqlite3 --build-from-source --unsafe-perm --verbose || true
-      # Verify better-sqlite3 works
-      node -e "const D=require('better-sqlite3');new D(':memory:');console.log('better-sqlite3 OK')" || echo "better-sqlite3 verification failed"
+      # Remove better-sqlite3 completely before reinstall
+      rm -rf node_modules/better-sqlite3
+      PUPPETEER_SKIP_DOWNLOAD=true npm ci --no-audit --no-fund
+      # Force rebuild from source - critical for Render compatibility
+      cd node_modules/better-sqlite3 && npm run install --build-from-source --verbose
+      cd ../..
+      # Verify better-sqlite3 works with absolute path
+      node -e "const D=require('./node_modules/better-sqlite3');new D(':memory:');console.log('better-sqlite3 build OK')" || echo "better-sqlite3 verification failed"
       if [ -f requirements.txt ]; then \
         python3 -m pip install --no-cache-dir --no-warn-script-location --prefer-binary --only-binary=:all: --target python_packages -r requirements.txt; \
       else \
         echo 'No Python requirements.txt found, skipping'; \
       fi
-    startCommand: echo "Runtime: Node version $(node -v)" && mkdir -p data/uploads tmp && rm -rf uploads && ln -s data/uploads uploads && node server.js
+    startCommand: |
+      echo "Runtime: Node version $(node -v)" && \
+      echo "Runtime: NPM version $(npm -v)" && \
+      echo "Runtime: Working directory: $(pwd)" && \
+      echo "Runtime: DB_PATH: $DB_PATH" && \
+      mkdir -p data/uploads tmp && \
+      rm -rf uploads && \
+      ln -s data/uploads uploads && \
+      node server.js
     healthCheckPath: /healthz
     envVars:
       - key: NODE_ENV

@@ -37,34 +37,43 @@ function attemptRebuildOnce(hintError) {
     try {
         if (attemptRebuildOnce._did) return;
         attemptRebuildOnce._did = true;
+        console.log('[SQLite] Attempting runtime rebuild of better-sqlite3...');
         const hinted = detectProjectRootFromError(hintError);
         const cwd = hinted || process.cwd();
         const env = { ...process.env, npm_config_build_from_source: 'true' };
         // Best-effort: rebuild native module for the current Node runtime
-        spawnSync('npm', ['rebuild', 'better-sqlite3', '--build-from-source'], {
+        const result = spawnSync('npm', ['rebuild', 'better-sqlite3', '--build-from-source', '--unsafe-perm'], {
             cwd,
             env,
             stdio: 'inherit'
         });
-    } catch (_) { /* ignore */ }
+        console.log('[SQLite] Rebuild attempt completed with status:', result.status);
+    } catch (e) { 
+        console.error('[SQLite] Rebuild attempt failed:', e.message);
+    }
 }
 
 (() => {
     const first = tryRequireBetterSqlite3();
     if (first && typeof first === 'object' && first.name) {
         // Received an Error instance
+        console.log('[SQLite] Initial require failed:', first.message);
         if (needsRebuild(first) && process.env.ALLOW_RUNTIME_SQLITE_REBUILD === '1') {
             // Try to rebuild then require again
             attemptRebuildOnce(first);
             const second = tryRequireBetterSqlite3();
             if (typeof second === 'function' || (second && second.open)) {
+                console.log('[SQLite] Successfully loaded after rebuild');
                 Database = second;
                 return;
+            } else {
+                console.error('[SQLite] Failed to load even after rebuild');
             }
         }
         Database = null;
     } else {
         // Successfully required the module
+        console.log('[SQLite] better-sqlite3 loaded successfully on first try');
         Database = first;
     }
 })();
@@ -99,7 +108,7 @@ function init() {
     console.log('[SQLite] DB directory exists:', fs.existsSync(path.dirname(DB_PATH)));
     
     if (!Database) {
-        throw new Error('better-sqlite3 is not installed');
+        throw new Error('better-sqlite3 is not installed or failed to load. Check build logs for native module errors.');
     }
     // Attempt to open DB; if ABI mismatch occurs at instantiation, try a one-time rebuild
     try {
