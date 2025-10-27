@@ -59,16 +59,17 @@ function attemptRebuildOnce(hintError) {
         // Received an Error instance
         console.log('[SQLite] Initial require failed:', first.message);
         if (needsRebuild(first) && process.env.ALLOW_RUNTIME_SQLITE_REBUILD === '1') {
-            // Try to rebuild then require again
-            attemptRebuildOnce(first);
-            const second = tryRequireBetterSqlite3();
-            if (typeof second === 'function' || (second && second.open)) {
-                console.log('[SQLite] Successfully loaded after rebuild');
-                Database = second;
-                return;
-            } else {
-                console.error('[SQLite] Failed to load even after rebuild');
-            }
+            console.log('[SQLite] Runtime rebuild requested but skipping to avoid hangs');
+            // Skip runtime rebuild as it can hang the process
+            // attemptRebuildOnce(first);
+            // const second = tryRequireBetterSqlite3();
+            // if (typeof second === 'function' || (second && second.open)) {
+            //     console.log('[SQLite] Successfully loaded after rebuild');
+            //     Database = second;
+            //     return;
+            // } else {
+            //     console.error('[SQLite] Failed to load even after rebuild');
+            // }
         }
         Database = null;
     } else {
@@ -123,17 +124,18 @@ function init() {
         console.log('[SQLite] Database opened successfully');
     } catch (e) {
         if (needsRebuild(e) && process.env.ALLOW_RUNTIME_SQLITE_REBUILD === '1') {
-            attemptRebuildOnce(e);
-            const re = tryRequireBetterSqlite3();
-            if (typeof re === 'function' || (re && re.open)) {
-                Database = re;
-            }
-            // Retry once after rebuild
-            try { fs.mkdirSync(path.dirname(DB_PATH), { recursive: true }); } catch (_) {}
-            db = new Database(DB_PATH);
-        } else {
-            throw e;
+            console.log('[SQLite] Database instantiation failed with rebuild error, but skipping runtime rebuild');
+            // Don't attempt runtime rebuild as it can hang
+            // attemptRebuildOnce(e);
+            // const re = tryRequireBetterSqlite3();
+            // if (typeof re === 'function' || (re && re.open)) {
+            //     Database = re;
+            // }
+            // // Retry once after rebuild
+            // try { fs.mkdirSync(path.dirname(DB_PATH), { recursive: true }); } catch (_) {}
+            // db = new Database(DB_PATH);
         }
+            throw e;
     }
     try { db.pragma('journal_mode = WAL'); } catch (_) {}
     db.exec(`
