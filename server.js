@@ -31,10 +31,12 @@ catch (_) { SQLiteStore = null; }
 const cron = require('node-cron');
 
 // Wrap db/sqlite require in try-catch to handle better-sqlite3 load failures gracefully
-let initDb, sqliteDb, upsertHearing, replaceResponses, replaceMaterials, readAggregate, getSessionEdits, upsertSessionEdit, setMaterialFlag, getMaterialFlags, addUpload, listUploads, markHearingComplete, isHearingComplete, setHearingArchived, listHearingsByStatusLike, listAllHearingIds;
+let initDb, sqliteModule, sqliteDb, upsertHearing, replaceRawResponses, replaceResponses, replaceRawMaterials, replaceMaterials, readAggregate, getRawAggregate, getPublishedAggregate, getPreparationState, updatePreparationState, recalcPreparationProgress, upsertPreparedResponse, deletePreparedResponse, upsertPreparedAttachment, deletePreparedAttachment, upsertPreparedMaterial, deletePreparedMaterial, listPreparedHearings, getPreparedBundle, publishPreparedHearing, replaceVectorChunks, listVectorChunks, getSessionEdits, upsertSessionEdit, setMaterialFlag, getMaterialFlags, addUpload, listUploads, markHearingComplete, isHearingComplete, setHearingArchived, listHearingsByStatusLike, listAllHearingIds;
 try {
-    const sqlite = require('./db/sqlite');
-    ({ init: initDb, db: sqliteDb, upsertHearing, replaceResponses, replaceMaterials, readAggregate, getSessionEdits, upsertSessionEdit, setMaterialFlag, getMaterialFlags, addUpload, listUploads, markHearingComplete, isHearingComplete, setHearingArchived, listHearingsByStatusLike, listAllHearingIds } = sqlite);
+    sqliteModule = require('./db/sqlite');
+    ({ init: initDb, upsertHearing, replaceRawResponses, replaceResponses, replaceRawMaterials, replaceMaterials, readAggregate, getRawAggregate, getPublishedAggregate, getPreparationState, updatePreparationState, recalcPreparationProgress, upsertPreparedResponse, deletePreparedResponse, upsertPreparedAttachment, deletePreparedAttachment, upsertPreparedMaterial, deletePreparedMaterial, listPreparedHearings, getPreparedBundle, publishPreparedHearing, replaceVectorChunks, listVectorChunks, getSessionEdits, upsertSessionEdit, setMaterialFlag, getMaterialFlags, addUpload, listUploads, markHearingComplete, isHearingComplete, setHearingArchived, listHearingsByStatusLike, listAllHearingIds } = sqliteModule);
+    // Get initial db reference (will be updated after initDb() is called)
+    sqliteDb = sqliteModule.db;
     console.log('[Server] SQLite module loaded successfully');
 } catch (e) {
     console.error('[Server] CRITICAL: Failed to load SQLite module:', e.message);
@@ -44,8 +46,26 @@ try {
     initDb = () => { console.warn('[Server] SQLite not available - initDb is a no-op'); };
     sqliteDb = null;
     upsertHearing = () => {};
+    replaceRawResponses = () => {};
     replaceResponses = () => {};
+    replaceRawMaterials = () => {};
     replaceMaterials = () => {};
+    getRawAggregate = () => ({ responses: [], materials: [] });
+    getPublishedAggregate = () => ({ responses: [], materials: [] });
+    getPreparationState = () => ({ status: 'draft', responses_ready: 0, materials_ready: 0 });
+    updatePreparationState = () => ({ status: 'draft', responses_ready: 0, materials_ready: 0 });
+    recalcPreparationProgress = () => ({ status: 'draft', responses_ready: 0, materials_ready: 0 });
+    upsertPreparedResponse = () => ({ state: { status: 'draft' } });
+    deletePreparedResponse = () => ({ status: 'draft' });
+    upsertPreparedAttachment = () => ({ status: 'draft' });
+    deletePreparedAttachment = () => ({ status: 'draft' });
+    upsertPreparedMaterial = () => ({ status: 'draft' });
+    deletePreparedMaterial = () => ({ status: 'draft' });
+    listPreparedHearings = () => [];
+    getPreparedBundle = () => null;
+    publishPreparedHearing = () => ({ status: 'draft' });
+    replaceVectorChunks = () => {};
+    listVectorChunks = () => [];
     readAggregate = () => null;
     getSessionEdits = () => ({});
     upsertSessionEdit = () => {};
@@ -101,6 +121,7 @@ const PREFETCH_MIN_INTERVAL_MS = Math.max(0, Number(process.env.PREFETCH_MIN_INT
 // In-memory guards to avoid thrashing
 const lastWarmAt = new Map(); // hearingId -> ts
 const prefetchInFlight = new Set(); // hearingId currently prefetching
+const hydrationInFlight = new Map(); // hearingId -> ongoing hydration promise
 
 // Render API configuration (for one-off jobs)
 const RENDER_API_KEY = process.env.RENDER_API_KEY || process.env.RENDER_TOKEN || '';
@@ -277,6 +298,354 @@ function computePreThoughts(inputText) {
     return scored.slice(0, 6).map(s => s.label);
 }
 
+function toInt(value, fallback = null) {
+    if (value === null || value === undefined || value === '') return fallback;
+    const num = Number(value);
+    if (!Number.isFinite(num)) return fallback;
+    const int = Math.trunc(num);
+    if (!Number.isFinite(int)) return fallback;
+    return int;
+}
+
+function allocatePreparedResponseId(hearingId) {
+    try {
+        if (!sqliteDb || typeof sqliteDb.prepare !== 'function') return Date.now();
+        const row = sqliteDb.prepare(`SELECT COALESCE(MAX(prepared_id),0) as maxId FROM prepared_responses WHERE hearing_id=?`).get(hearingId);
+        return (row?.maxId || 0) + 1;
+    } catch (err) {
+        console.error('[Server] allocatePreparedResponseId failed:', err.message);
+        return Date.now();
+    }
+}
+
+function allocatePreparedAttachmentId(hearingId, preparedId) {
+    try {
+        if (!sqliteDb || typeof sqliteDb.prepare !== 'function') return Date.now();
+        const row = sqliteDb.prepare(`SELECT COALESCE(MAX(attachment_id),0) as maxId FROM prepared_attachments WHERE hearing_id=? AND prepared_id=?`).get(hearingId, preparedId);
+        return (row?.maxId || 0) + 1;
+    } catch (err) {
+        console.error('[Server] allocatePreparedAttachmentId failed:', err.message);
+        return Date.now();
+    }
+}
+
+function allocatePreparedMaterialId(hearingId) {
+    try {
+        if (!sqliteDb || typeof sqliteDb.prepare !== 'function') return Date.now();
+        const row = sqliteDb.prepare(`SELECT COALESCE(MAX(material_id),0) as maxId FROM prepared_materials WHERE hearing_id=?`).get(hearingId);
+        return (row?.maxId || 0) + 1;
+    } catch (err) {
+        console.error('[Server] allocatePreparedMaterialId failed:', err.message);
+        return Date.now();
+    }
+}
+
+function ensurePreparedResponsesFromRaw(hearingId) {
+    if (!hearingId) return;
+    // Get live db reference
+    const db = sqliteModule ? sqliteModule.db : sqliteDb;
+    if (!db || typeof db.prepare !== 'function') return;
+    try {
+        // First, clean up duplicates - keep only one prepared response per source_response_id
+        const duplicates = db.prepare(`
+            SELECT source_response_id, COUNT(*) as count, MIN(prepared_id) as keep_id
+            FROM prepared_responses
+            WHERE hearing_id=? AND source_response_id IS NOT NULL
+            GROUP BY hearing_id, source_response_id
+            HAVING COUNT(*) > 1
+        `).all(hearingId);
+        
+        if (duplicates.length > 0) {
+            const tx = db.transaction(() => {
+                for (const dup of duplicates) {
+                    // Keep the one with approved status if any, otherwise keep the oldest
+                    const approvedOne = db.prepare(`
+                        SELECT prepared_id FROM prepared_responses
+                        WHERE hearing_id=? AND source_response_id=? AND approved=1
+                        ORDER BY prepared_id ASC LIMIT 1
+                    `).get(hearingId, dup.source_response_id);
+                    
+                    const keepId = approvedOne ? approvedOne.prepared_id : dup.keep_id;
+                    
+                    // Delete all except the one to keep
+                    const toDelete = db.prepare(`
+                        SELECT prepared_id FROM prepared_responses
+                        WHERE hearing_id=? AND source_response_id=? AND prepared_id != ?
+                    `).all(hearingId, dup.source_response_id, keepId);
+                    
+                    for (const row of toDelete) {
+                        db.prepare(`DELETE FROM prepared_attachments WHERE hearing_id=? AND prepared_id=?`).run(hearingId, row.prepared_id);
+                        db.prepare(`DELETE FROM prepared_responses WHERE hearing_id=? AND prepared_id=?`).run(hearingId, row.prepared_id);
+                    }
+                }
+            });
+            tx();
+        }
+
+        const rawResponses = db.prepare(`
+            SELECT response_id as responseId, text, author, organization, on_behalf_of as onBehalfOf, submitted_at as submittedAt
+            FROM raw_responses
+            WHERE hearing_id=?
+            ORDER BY response_id ASC
+        `).all(hearingId);
+        if (!Array.isArray(rawResponses) || !rawResponses.length) return;
+
+        const existing = db.prepare(`
+            SELECT source_response_id as sourceResponseId, approved, approved_at
+            FROM prepared_responses
+            WHERE hearing_id=?
+        `).all(hearingId);
+
+        const existingSources = new Set();
+        const existingApproved = new Map(); // Track approved status
+        for (const row of existing || []) {
+            const src = row?.sourceResponseId;
+            if (src === null || src === undefined) continue;
+            const normalized = Number(src);
+            if (Number.isFinite(normalized)) {
+                existingSources.add(normalized);
+                if (row.approved) {
+                    existingApproved.set(normalized, row.approved_at);
+                }
+            }
+        }
+
+        const selectAttachments = db.prepare(`
+            SELECT idx as attachmentIdx, filename, url
+            FROM raw_attachments
+            WHERE hearing_id=? AND response_id=?
+            ORDER BY idx ASC
+        `);
+
+        for (const raw of rawResponses) {
+            const sourceId = Number(raw.responseId);
+            if (!Number.isFinite(sourceId) || existingSources.has(sourceId)) continue;
+
+            const attachments = selectAttachments.all(hearingId, sourceId) || [];
+            const preparedId = allocatePreparedResponseId(hearingId);
+
+            // Check if this should be auto-approved (preserve approved status)
+            const wasApproved = existingApproved.has(sourceId);
+            const approvedAt = wasApproved ? existingApproved.get(sourceId) : null;
+
+            upsertPreparedResponse(hearingId, preparedId, {
+                sourceResponseId: sourceId,
+                respondentName: 'Borger', // Standard skal være "Borger" - ikke bruge navne fra blivhørt
+                respondentType: 'Borger', // Standard skal være "Borger"
+                author: raw.author || null,
+                organization: raw.organization || null,
+                onBehalfOf: raw.onBehalfOf || null,
+                submittedAt: raw.submittedAt || null,
+                textMd: raw.text || '',
+                hasAttachments: Array.isArray(attachments) && attachments.length > 0,
+                attachmentsReady: false,
+                approved: wasApproved || false,
+                approvedAt: approvedAt
+            });
+
+            attachments.forEach((attachment, idx) => {
+                const attachmentId = allocatePreparedAttachmentId(hearingId, preparedId);
+                const rawIdx = Number(attachment.attachmentIdx);
+                const sourceAttachmentIdx = Number.isFinite(rawIdx) ? rawIdx : idx;
+                upsertPreparedAttachment(hearingId, preparedId, attachmentId, {
+                    sourceAttachmentIdx,
+                    originalFilename: attachment.filename || `Bilag ${idx + 1}`,
+                    sourceUrl: attachment.url || null,
+                    convertedMd: null,
+                    conversionStatus: null,
+                    approved: false,
+                    notes: null
+                });
+            });
+
+            existingSources.add(sourceId);
+        }
+    } catch (error) {
+        console.error('[GDPR] ensurePreparedResponsesFromRaw failed:', error);
+    }
+}
+
+function ensurePreparedResponsesForAllHearings() {
+    // Get live db reference
+    const db = sqliteModule ? sqliteModule.db : sqliteDb;
+    if (!db || typeof db.prepare !== 'function') return;
+    if (typeof listAllHearingIds !== 'function') return;
+    try {
+        const ids = listAllHearingIds();
+        if (!Array.isArray(ids) || !ids.length) return;
+        for (const hearingId of ids) {
+            ensurePreparedResponsesFromRaw(hearingId);
+        }
+    } catch (error) {
+        console.error('[GDPR] ensurePreparedResponsesForAllHearings failed:', error);
+    }
+}
+
+async function convertFileToMarkdown(inputPath, options = {}) {
+    await ensurePythonDeps();
+    const python = process.env.PYTHON_BIN || 'python3';
+    const scriptPath = path.join(__dirname, 'scripts', 'convert_to_md.py');
+    const args = [scriptPath, '--input', inputPath, '--format', 'json'];
+    if (options.maxPages) args.push('--max-pages', String(options.maxPages));
+    if (options.includeMetadata) args.push('--metadata');
+    const localPy = path.join(__dirname, 'python_packages');
+    const mergedPyPath = [localPy, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter);
+    const env = { ...process.env, PYTHONPATH: mergedPyPath };
+    return await new Promise((resolve, reject) => {
+        const child = spawn(python, args, { stdio: ['ignore', 'pipe', 'pipe'], env });
+        let stdout = '';
+        let stderr = '';
+        child.stdout.on('data', d => { stdout += d.toString(); });
+        child.stderr.on('data', d => { stderr += d.toString(); });
+        child.on('error', reject);
+        child.on('close', (code) => {
+            if (code !== 0) {
+                const err = new Error(stderr || `convert_to_md exited with code ${code}`);
+                err.code = code;
+                err.stderr = stderr;
+                return reject(err);
+            }
+            try {
+                const payload = stdout ? JSON.parse(stdout) : {};
+                resolve(payload || {});
+            } catch (error) {
+                error.stderr = stderr;
+                reject(error);
+            }
+        });
+    });
+}
+
+function splitTextIntoChunks(text, chunkSize = 220, overlap = 30) {
+    const words = String(text || '').split(/\s+/).filter(Boolean);
+    if (!words.length) return [];
+    const chunks = [];
+    let index = 0;
+    while (index < words.length) {
+        const slice = words.slice(index, index + chunkSize);
+        if (!slice.length) break;
+        chunks.push(slice.join(' '));
+        if (index + chunkSize >= words.length) break;
+        index = Math.max(index + chunkSize - overlap, index + 1);
+    }
+    return chunks.filter(Boolean);
+}
+
+async function rebuildLocalVectorStore(hearingId) {
+    if (!sqliteDb || !sqliteDb.prepare) throw new Error('Database ikke tilgængelig');
+    const bundle = getPreparedBundle(hearingId);
+    if (!bundle) throw new Error('Høring ikke fundet');
+
+    const preparedResponses = bundle.prepared?.responses || [];
+    const preparedMaterials = bundle.prepared?.materials || [];
+    const chunks = [];
+
+    preparedResponses.forEach((resp) => {
+        const baseSource = `response:${resp.preparedId}`;
+        const mainChunks = splitTextIntoChunks(resp.textMd || resp.text || '')
+            .map((content, idx) => ({
+                chunkId: `${baseSource}:text:${idx}`,
+                source: baseSource,
+                content
+            }));
+        chunks.push(...mainChunks);
+        (resp.attachments || []).forEach((att) => {
+            const attChunks = splitTextIntoChunks(att.convertedMd || '')
+                .map((content, idx) => ({
+                    chunkId: `${baseSource}:attachment:${att.attachmentId}:${idx}`,
+                    source: `attachment:${resp.preparedId}:${att.attachmentId}`,
+                    content
+                }));
+            chunks.push(...attChunks);
+        });
+    });
+
+    preparedMaterials.forEach((mat) => {
+        const matChunks = splitTextIntoChunks(mat.contentMd || '')
+            .map((content, idx) => ({
+                chunkId: `material:${mat.materialId}:${idx}`,
+                source: `material:${mat.materialId}`,
+                content
+            }));
+        chunks.push(...matChunks);
+    });
+
+    if (!chunks.length) {
+        replaceVectorChunks(hearingId, []);
+        updatePreparationState(hearingId, { vector_store_id: 'local-sqlite', vector_store_updated_at: Date.now() });
+        return { chunkCount: 0 };
+    }
+
+    let embeddings = [];
+    if (openai) {
+        const model = process.env.EMBEDDING_MODEL || 'text-embedding-3-small';
+        const batchSize = 60;
+        for (let i = 0; i < chunks.length; i += batchSize) {
+            const slice = chunks.slice(i, i + batchSize).map(c => c.content.slice(0, 8000));
+            try {
+                const response = await openai.embeddings.create({ model, input: slice });
+                const vectors = response?.data || [];
+                vectors.forEach((item, idx) => {
+                    if (!embeddings[i + idx]) embeddings[i + idx] = item.embedding;
+                });
+            } catch (error) {
+                console.error('[VectorStore] embed batch failed:', error.message);
+                // fallback: fill zeros for this batch
+                for (let j = 0; j < slice.length; j += 1) {
+                    embeddings[i + j] = [];
+                }
+            }
+        }
+    } else {
+        embeddings = chunks.map(() => []);
+    }
+
+    const augmented = chunks.map((chunk, idx) => ({
+        chunkId: chunk.chunkId,
+        source: chunk.source,
+        content: chunk.content,
+        embedding: embeddings[idx] || []
+    }));
+
+    replaceVectorChunks(hearingId, augmented);
+    updatePreparationState(hearingId, { vector_store_id: 'local-sqlite', vector_store_updated_at: Date.now() });
+    return { chunkCount: augmented.length };
+}
+
+function cosineSimilarity(vecA, vecB) {
+    if (!Array.isArray(vecA) || !Array.isArray(vecB) || !vecA.length || vecA.length !== vecB.length) return 0;
+    let dot = 0;
+    let normA = 0;
+    let normB = 0;
+    for (let i = 0; i < vecA.length; i += 1) {
+        const a = vecA[i];
+        const b = vecB[i];
+        dot += a * b;
+        normA += a * a;
+        normB += b * b;
+    }
+    if (!normA || !normB) return 0;
+    return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+async function queryLocalVectorStore(hearingId, query, topK = 8) {
+    if (!openai) return [];
+    const chunks = listVectorChunks(hearingId);
+    if (!chunks.length) return [];
+    const embeddingRes = await openai.embeddings.create({ model: process.env.EMBEDDING_MODEL || 'text-embedding-3-small', input: [String(query || '').slice(0, 8000)] });
+    const queryEmbedding = embeddingRes?.data?.[0]?.embedding;
+    if (!Array.isArray(queryEmbedding)) return [];
+    const scored = chunks.map(chunk => ({
+        chunk,
+        score: cosineSimilarity(queryEmbedding, chunk.embedding || [])
+    })).sort((a, b) => b.score - a.score);
+    return scored.slice(0, topK).map(item => ({
+        score: item.score,
+        source: item.chunk.source,
+        content: item.chunk.content
+    }));
+}
+
 const app = express();
 const PORT = process.env.PORT || 3010;
 
@@ -286,8 +655,35 @@ try { app.set('trust proxy', 1); } catch {}
 
 app.use(cors());
 app.use(express.static(path.join(__dirname, 'public')));
+app.get('/gdpr', (req, res) => {
+    res.sendFile(path.join(__dirname, 'public', 'gdpr.html'));
+});
 const upload = multer({ dest: path.join(__dirname, 'uploads') });
 try { fs.mkdirSync(path.join(__dirname, 'uploads'), { recursive: true }); } catch {}
+const gdprUploadDir = path.join(__dirname, 'uploads', 'gdpr');
+try { fs.mkdirSync(gdprUploadDir, { recursive: true }); } catch {}
+const gdprMaterialUpload = multer({
+    dest: gdprUploadDir,
+    limits: { fileSize: Number(process.env.GDPR_UPLOAD_MAX_BYTES || 25 * 1024 * 1024) },
+    fileFilter: (req, file, cb) => {
+        try {
+            const allowedMime = ['application/pdf', 'text/markdown', 'text/plain'];
+            if (allowedMime.includes(file.mimetype)) return cb(null, true);
+            // Accept octet-stream but ensure extension .pdf or .md
+            if (file.mimetype === 'application/octet-stream') {
+                const lower = String(file.originalname || '').toLowerCase();
+                if (lower.endsWith('.pdf') || lower.endsWith('.md') || lower.endsWith('.txt')) {
+                    return cb(null, true);
+                }
+            }
+            const error = new Error('Unsupported file type for GDPR material upload');
+            error.statusCode = 415;
+            return cb(error);
+        } catch (err) {
+            return cb(err || new Error('Upload failed'));
+        }
+    }
+});
 // Ensure templates dir exists for DOCX builder (python script writes template if missing)
 try { fs.mkdirSync(path.join(__dirname, 'templates'), { recursive: true }); } catch {}
 // Ensure persistent data dir exists BEFORE session + DB init
@@ -299,6 +695,10 @@ console.log('[Server] Current directory:', __dirname);
 console.log('[Server] Data directory:', path.join(__dirname, 'data'));
 try { 
     initDb(); 
+    // Update sqliteDb reference after initialization
+    if (sqliteModule) {
+        sqliteDb = sqliteModule.db;
+    }
     // Prime a trivial statement to ensure better-sqlite3 loads and DB file is touchable
     const sqlite = require('./db/sqlite');
     try { if (sqlite && sqlite.db && sqlite.db.prepare) sqlite.db.prepare('SELECT 1').get(); } catch {}
@@ -355,7 +755,7 @@ function ensurePythonDeps() {
         const localPy = path.join(__dirname, 'python_packages');
         const mergedPyPath = [localPy, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter);
         const env = { ...process.env, PYTHONPATH: mergedPyPath };
-        const testCmd = [ '-c', 'import sys; sys.path.insert(0, "' + localPy.replace(/"/g, '\\"') + '"); import docx; from lxml import etree; print("ok")' ];
+        const testCmd = [ '-c', 'import sys; sys.path.insert(0, "' + localPy.replace(/"/g, '\\"') + '"); import docx; from lxml import etree; import fitz; print("ok")' ];
         try {
             const test = spawn(python, testCmd, { stdio: ['ignore','pipe','pipe'], env });
             let out = '';
@@ -392,7 +792,7 @@ function ensurePythonDeps() {
                                 resolve(true);
                             } else {
                                 // Final fallback: try older lxml compatible on wider Python versions
-                                const fbArgs = ['-m','pip','install','--no-cache-dir','--no-warn-script-location','--upgrade','--prefer-binary','--only-binary',':all:','--target', target, 'python-docx>=1.2.0', 'lxml<5', 'Pillow>=8.4.0'];
+                                const fbArgs = ['-m','pip','install','--no-cache-dir','--no-warn-script-location','--upgrade','--prefer-binary','--only-binary',':all:','--target', target, 'python-docx>=1.2.0', 'lxml<5', 'Pillow>=8.4.0', 'PyMuPDF>=1.24.5'];
                                 const pipFb = spawn(python, fbArgs, { stdio: ['ignore','pipe','pipe'], env });
                                 pipFb.on('close', () => {
                                     const test3 = spawn(python, testCmd, { stdio: ['ignore','pipe','pipe'], env });
@@ -2840,6 +3240,104 @@ function mergeResponsesPreferFullText(a, b) {
 }
 
 
+function buildAggregateResponseFromDb(hearingId) {
+    const aggregate = readAggregate(hearingId);
+    if (!aggregate || !aggregate.hearing) return null;
+    const responses = Array.isArray(aggregate.responses) ? aggregate.responses : [];
+    const hearing = { ...(aggregate.hearing || {}) };
+    try {
+        const meta = readPersistedHearingWithMeta(hearingId);
+        const persisted = meta?.data;
+        if (persisted && persisted.hearing) {
+            const pj = persisted.hearing;
+            const isPlaceholderTitle = !hearing.title || /^Høring\s+\d+$/i.test(String(hearing.title || ''));
+            const isUnknownStatus = !hearing.status || String(hearing.status || '').toLowerCase() === 'ukendt';
+            if (isPlaceholderTitle && pj.title) hearing.title = pj.title;
+            if (!hearing.startDate && pj.startDate) hearing.startDate = pj.startDate;
+            if (!hearing.deadline && pj.deadline) hearing.deadline = pj.deadline;
+            if (isUnknownStatus && pj.status) hearing.status = pj.status;
+        }
+    } catch {}
+    return {
+        success: true,
+        hearing,
+        responses,
+        totalResponses: responses.length,
+        totalPages: undefined
+    };
+}
+
+function buildAggregateResponseFromPersisted(hearingId) {
+    try {
+        const meta = readPersistedHearingWithMeta(hearingId);
+        const persisted = meta?.data;
+        if (persisted && persisted.success && persisted.hearing) {
+            return {
+                success: true,
+                hearing: persisted.hearing,
+                responses: Array.isArray(persisted.responses) ? persisted.responses : [],
+                totalResponses: Array.isArray(persisted.responses) ? persisted.responses.length : 0,
+                totalPages: persisted.totalPages || undefined
+            };
+        }
+    } catch {}
+    return null;
+}
+
+async function ensureHearingHydrated(hearingId) {
+    const key = String(hearingId).trim();
+    if (!key) return;
+    if (!hydrationInFlight.has(key)) {
+        const promise = (async () => {
+            let hydrated = false;
+            try {
+                const direct = await hydrateHearingDirect(key);
+                hydrated = !!(direct && direct.success);
+            } catch (err) {
+                console.warn(`[hydrate] direct fetch failed for ${key}:`, err?.message || err);
+            }
+            if (!hydrated) {
+                const base = (process.env.PUBLIC_URL || '').trim() || `http://localhost:${PORT}`;
+                try {
+                    await axios.get(`${base}/api/hearing/${key}/responses?nocache=1`, { validateStatus: () => true, timeout: INTERNAL_API_TIMEOUT_MS });
+                    hydrated = true;
+                } catch (err) {
+                    console.warn(`[hydrate] fallback responses fetch failed for ${key}:`, err?.message || err);
+                }
+                try {
+                    await axios.get(`${base}/api/hearing/${key}/materials?nocache=1`, { validateStatus: () => true, timeout: INTERNAL_API_TIMEOUT_MS });
+                } catch (err) {
+                    console.warn(`[hydrate] fallback materials fetch failed for ${key}:`, err?.message || err);
+                }
+            }
+            if (!hydrated) throw new Error('Hydration failed');
+            await sleep(50);
+        })().catch(err => {
+            throw err;
+        }).finally(() => {
+            hydrationInFlight.delete(key);
+        });
+        hydrationInFlight.set(key, promise);
+    }
+    return hydrationInFlight.get(key);
+}
+
+async function hydrateAndReloadAggregate(hearingId) {
+    try {
+        await ensureHearingHydrated(hearingId);
+    } catch (err) {
+        console.warn(`[aggregate] hydration attempt failed for ${hearingId}:`, err?.message || err);
+    }
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+        const fromDb = buildAggregateResponseFromDb(hearingId);
+        if (fromDb) return fromDb;
+        const fromPersisted = buildAggregateResponseFromPersisted(hearingId);
+        if (fromPersisted) return fromPersisted;
+        await sleep(100 * (attempt + 1));
+    }
+    return null;
+}
+
 // API endpoint to fetch hearing data
 app.get('/api/hearing/:id', async (req, res) => {
     try {
@@ -2847,189 +3345,43 @@ app.get('/api/hearing/:id', async (req, res) => {
         if (!/^\d+$/.test(hearingId)) {
             return res.status(400).json({ success: false, message: 'Ugyldigt hørings-ID' });
         }
-        // DB-first read path; fallback to persisted JSON snapshot if available
-        const fromDb = readAggregate(hearingId);
-        if (fromDb && fromDb.hearing) {
-            // Improve meta from persisted JSON if DB has placeholders
-            try {
-                const meta = readPersistedHearingWithMeta(hearingId);
-                const persisted = meta?.data;
-                if (persisted && persisted.hearing) {
-                    const dbH = fromDb.hearing || {};
-                    const pj = persisted.hearing || {};
-                    const isPlaceholderTitle = !dbH.title || /^Høring\s+\d+$/i.test(String(dbH.title||''));
-                    const isUnknownStatus = !dbH.status || String(dbH.status||'').toLowerCase() === 'ukendt';
-                    if (isPlaceholderTitle && pj.title) dbH.title = pj.title;
-                    if (!dbH.startDate && pj.startDate) dbH.startDate = pj.startDate;
-                    if (!dbH.deadline && pj.deadline) dbH.deadline = pj.deadline;
-                    if (isUnknownStatus && pj.status) dbH.status = pj.status;
-                    fromDb.hearing = dbH;
-                }
-            } catch {}
-            return res.json({ success: true, hearing: fromDb.hearing, totalPages: undefined, totalResponses: (fromDb.responses||[]).length, responses: fromDb.responses });
-        }
-        try {
-            const meta = readPersistedHearingWithMeta(hearingId);
-            const persisted = meta?.data;
-            if (persisted && persisted.success && persisted.hearing) {
-                // Best-effort: also persist to SQLite so subsequent DB reads work offline
-                try { upsertHearing(persisted.hearing); } catch {}
-                try { if (Array.isArray(persisted.responses)) replaceResponses(Number(hearingId), persisted.responses); } catch {}
-                return res.json({
-                    success: true,
-                    hearing: persisted.hearing,
-                    totalPages: persisted.totalPages || undefined,
-                    totalResponses: Array.isArray(persisted.responses) ? persisted.responses.length : 0,
-                    responses: Array.isArray(persisted.responses) ? persisted.responses : []
-                });
+        const allowHydrate = String(req.query.hydrate || '1').trim().toLowerCase() !== '0';
+
+        let candidate = null;
+
+        const fromDb = buildAggregateResponseFromDb(hearingId);
+        if (fromDb) {
+            if (!allowHydrate || (fromDb.totalResponses && fromDb.totalResponses > 0)) {
+                return res.json(fromDb);
             }
-        } catch {}
+            candidate = fromDb;
+        }
+
+        const fromPersisted = buildAggregateResponseFromPersisted(hearingId);
+        if (fromPersisted) {
+            if (!allowHydrate || (fromPersisted.totalResponses && fromPersisted.totalResponses > 0)) {
+                try { upsertHearing(fromPersisted.hearing); } catch {}
+                try { if (Array.isArray(fromPersisted.responses)) replaceResponses(Number(hearingId), fromPersisted.responses); } catch {}
+                return res.json(fromPersisted);
+            }
+            if (!candidate) candidate = fromPersisted;
+        }
+
+        if (allowHydrate) {
+            const hydrated = await hydrateAndReloadAggregate(hearingId);
+            if (hydrated) {
+                try { upsertHearing(hydrated.hearing); } catch {}
+                try { if (Array.isArray(hydrated.responses)) replaceResponses(Number(hearingId), hydrated.responses); } catch {}
+                if (hydrated.totalResponses && hydrated.totalResponses > 0) {
+                    return res.json(hydrated);
+                }
+                if (!candidate) candidate = hydrated;
+            }
+        }
+
+        if (candidate) return res.json(candidate);
+
         return res.status(404).json({ success: false, message: 'Ikke fundet i databasen' });
-
-        // Full HTML scrape for all pages, as it's the most reliable source for attachments.
-        let htmlResponses = [];
-        let totalPages = 1;
-        try {
-            const first = await withRetries(() => fetchCommentsPage(baseUrl, hearingId, 1, axiosInstance), { attempts: 3, baseDelayMs: 600 });
-            htmlResponses = first.responses || [];
-            totalPages = first.totalPages || 1;
-            // If totalPages known, fetch remaining in parallel with small concurrency; otherwise sequential with guard
-            if (typeof totalPages === 'number' && totalPages > 1) {
-                const remaining = [];
-                for (let p = 2; p <= totalPages; p += 1) remaining.push(p);
-                const maxConcurrent = 4;
-                let cursor = 0;
-                const workers = new Array(Math.min(maxConcurrent, remaining.length)).fill(0).map(async () => {
-                    while (cursor < remaining.length) {
-                        const myIdx = cursor++;
-                        const p = remaining[myIdx];
-                        const result = await withRetries(() => fetchCommentsPage(baseUrl, hearingId, p, axiosInstance), { attempts: 2, baseDelayMs: 400 });
-                        const pageItems = Array.isArray(result.responses) ? result.responses : [];
-                        if (pageItems.length) htmlResponses = htmlResponses.concat(pageItems);
-                    }
-                });
-                await Promise.all(workers);
-            } else {
-                // Unknown page count: sequential until 2 consecutive empties OR duplicate detection
-                let pageIndex = 2;
-                let consecutiveEmpty = 0;
-                let lastFirstId = htmlResponses[0]?.responseNumber ?? null;
-                for (;;) {
-                    const result = await withRetries(() => fetchCommentsPage(baseUrl, hearingId, pageIndex, axiosInstance), { attempts: 2, baseDelayMs: 400 });
-                    const pageItems = Array.isArray(result.responses) ? result.responses : [];
-                    if (!pageItems.length) {
-                        consecutiveEmpty += 1;
-                        if (consecutiveEmpty >= 2) break;
-                    } else {
-                        consecutiveEmpty = 0;
-                        // If site serves page 1 for all indices, detect duplicate first id
-                        const currentFirstId = pageItems[0]?.responseNumber ?? null;
-                        if (lastFirstId !== null && currentFirstId !== null && currentFirstId === lastFirstId) break;
-                        lastFirstId = currentFirstId;
-                        htmlResponses = htmlResponses.concat(pageItems);
-                    }
-                    // Keep totalPages up to date if extractor discovered it later
-                    if (!totalPages && result.totalPages) totalPages = result.totalPages;
-                    pageIndex += 1;
-                    if (pageIndex > 200) break; // hard cap safety
-                }
-            }
-            logDebug(`[aggregate] hearing=${hearingId} htmlResponses=${htmlResponses.length} totalPages=${totalPages}`);
-        } catch (_) {
-            // Gracefully fallback if HTML scraping fails.
-            htmlResponses = [];
-            totalPages = 1;
-        }
-
-        // Also fetch from the API as a fallback and for merging.
-        const apiBaseUrl = `${baseUrl}/api`;
-        let viaApi = { responses: [], totalPages: null };
-        try {
-            viaApi = await fetchCommentsViaApi(apiBaseUrl, hearingId, axiosInstance);
-        } catch (_) {
-            // Ignore API errors
-        }
-        // If HTML suggested multiple pages but we still have exactly 12 responses, try a last HTML loop pass
-        if (normalizedResponses.length === 12 && (typeof totalPages === 'number' ? totalPages > 1 : true)) {
-            try {
-                let pageIndex = 2;
-                let guard = 0;
-                while (guard < 10) {
-                    const result = await withRetries(() => fetchCommentsPage(baseUrl, hearingId, pageIndex, axiosInstance), { attempts: 2, baseDelayMs: 300 });
-                    const pageItems = Array.isArray(result.responses) ? result.responses : [];
-                    if (!pageItems.length) break;
-                    htmlResponses = htmlResponses.concat(pageItems);
-                    pageIndex += 1;
-                    guard += 1;
-                }
-            } catch {}
-        }
-
-        // Merge results, giving preference to ones with more text, then normalize.
-        const merged = mergeResponsesPreferFullText(htmlResponses, viaApi.responses || []);
-        const normalizedResponses = normalizeResponses(merged);
-        
-        // Use the most reliable totalPages count.
-        totalPages = viaApi.totalPages || totalPages;
-
-        // Try to improve meta by parsing root page __NEXT_DATA__ if index lacks data
-        let hearingMeta = { title: null, deadline: null, startDate: null, status: null };
-        try {
-            const rootPage = await withRetries(() => fetchHearingRootPage(baseUrl, hearingId, axiosInstance), { attempts: 3, baseDelayMs: 600 });
-            if (rootPage.nextJson) hearingMeta = extractMetaFromNextJson(rootPage.nextJson);
-        } catch {}
-
-        // Fallback: Public JSON API for a single hearing to extract title/dates/status
-        if (!hearingMeta.title || !hearingMeta.deadline || !hearingMeta.startDate || !hearingMeta.status) {
-            try {
-                const apiUrl = `${baseUrl}/api/hearing/${hearingId}`;
-                const r = await axiosInstance.get(apiUrl, { validateStatus: () => true, headers: { Accept: 'application/json' } });
-                if (r.status === 200 && r.data) {
-                    const data = r.data;
-                    const item = (data?.data && data.data.type === 'hearing') ? data.data : null;
-                    const included = Array.isArray(data?.included) ? data.included : [];
-                    const contents = included.filter(x => x?.type === 'content');
-                    const titleContent = contents.find(c => String(c?.relationships?.field?.data?.id || '') === '1' && c?.attributes?.textContent);
-                    const attrs = item?.attributes || {};
-                    const statusRelId = item?.relationships?.hearingStatus?.data?.id;
-                    const statusIncluded = included.find(inc => inc.type === 'hearingStatus' && String(inc.id) === String(statusRelId));
-                    hearingMeta = {
-                        title: hearingMeta.title || (titleContent ? fixEncoding(String(titleContent.attributes.textContent).trim()) : null),
-                        deadline: hearingMeta.deadline || attrs.deadline || null,
-                        startDate: hearingMeta.startDate || attrs.startDate || null,
-                        status: hearingMeta.status || statusIncluded?.attributes?.name || null
-                    };
-                }
-            } catch {}
-        }
-        const hearingInfoFromIndex = hearingIndex.find(h => String(h.id) === hearingId) || {};
-        const hearing = {
-            id: Number(hearingId),
-            title: hearingMeta.title || hearingInfoFromIndex.title || `Høring ${hearingId}`,
-            startDate: hearingMeta.startDate || hearingInfoFromIndex.startDate || null,
-            deadline: hearingMeta.deadline || hearingInfoFromIndex.deadline || null,
-            status: hearingMeta.status || hearingInfoFromIndex.status || 'ukendt',
-            url: `${baseUrl}/hearing/${hearingId}/comments`
-        };
-
-        // Update in-memory index with improved meta for future searches
-        try {
-            const idx = hearingIndex.findIndex(h => h.id === Number(hearingId));
-            if (idx >= 0) {
-                const updated = { ...hearingIndex[idx] };
-                updated.title = hearing.title;
-                updated.startDate = hearing.startDate;
-                updated.deadline = hearing.deadline;
-                updated.status = hearing.status;
-                updated.normalizedTitle = normalizeDanish(updated.title || '');
-                updated.titleTokens = tokenize(updated.title || '');
-                updated.deadlineTs = updated.deadline ? new Date(updated.deadline).getTime() : null;
-                updated.isOpen = computeIsOpen(updated.status, updated.deadline);
-                hearingIndex[idx] = updated;
-            }
-        } catch {}
-
-        // Unreachable in DB-only mode
     } catch (error) {
         console.error(`Error in /api/hearing/${req.params.id}:`, error.message);
         res.status(500).json({ success: false, message: 'Uventet fejl', error: error.message });
@@ -3122,14 +3474,40 @@ app.get('/api/hearing/:id/responses', async (req, res) => {
         if (!/^\d+$/.test(hearingId)) {
             return res.status(400).json({ success: false, message: 'Ugyldigt hørings-ID' });
         }
+        try {
+            const published = getPublishedAggregate(Number(hearingId));
+            if (published && Array.isArray(published.responses) && published.responses.length) {
+                const mapped = published.responses.map(r => ({
+                    id: r.id,
+                    text: r.text,
+                    textMd: r.textMd || r.text,
+                    respondentName: r.respondentName || null,
+                    respondentType: r.respondentType || null,
+                    author: r.author || null,
+                    organization: r.organization || null,
+                    onBehalfOf: r.onBehalfOf || null,
+                    submittedAt: r.submittedAt || null,
+                    hasAttachments: r.hasAttachments || (Array.isArray(r.attachments) && r.attachments.length > 0),
+                    attachments: (r.attachments || []).map(a => ({
+                        attachmentId: a.attachmentId,
+                        filename: a.filename,
+                        contentMd: a.contentMd || null,
+                        publishedAt: a.publishedAt || null
+                    }))
+                }));
+                return res.json({ success: true, totalResponses: mapped.length, responses: mapped, source: 'published' });
+            }
+        } catch (err) {
+            console.warn('[GDPR] Failed to load published responses, falling back:', err.message);
+        }
         const noCache = String(req.query.nocache || '').trim() === '1';
         const preferPersist = PERSIST_PREFER || String(req.query.persist || '').trim() === '1';
         // Offline-first: read from DB if available
         try {
             const sqlite = require('./db/sqlite');
             if (sqlite && sqlite.db && sqlite.db.prepare) {
-                const rows = sqlite.db.prepare(`SELECT response_id as id, text, author, organization, on_behalf_of as onBehalfOf, submitted_at as submittedAt FROM responses WHERE hearing_id=? ORDER BY response_id ASC`).all(hearingId);
-                const atts = sqlite.db.prepare(`SELECT response_id as id, idx, filename, url FROM attachments WHERE hearing_id=? ORDER BY response_id ASC, idx ASC`).all(hearingId);
+                const rows = sqlite.db.prepare(`SELECT response_id as id, text, author, organization, on_behalf_of as onBehalfOf, submitted_at as submittedAt FROM raw_responses WHERE hearing_id=? ORDER BY response_id ASC`).all(hearingId);
+                const atts = sqlite.db.prepare(`SELECT response_id as id, idx, filename, url FROM raw_attachments WHERE hearing_id=? ORDER BY response_id ASC, idx ASC`).all(hearingId);
                 const byId = new Map(rows.map(r => [Number(r.id), { ...r, attachments: [] }]));
                 for (const a of atts) {
                     const t = byId.get(Number(a.id)); if (t) t.attachments.push({ filename: a.filename, url: a.url });
@@ -3253,8 +3631,24 @@ app.get('/api/hearing/:id/materials', async (req, res) => {
         }
         // Prefer DB, but gracefully fall back to persisted JSON if DB is unavailable/empty
         try {
+            const published = getPublishedAggregate(Number(hearingId));
+            if (published && Array.isArray(published.materials) && published.materials.length) {
+                const mapped = published.materials.map(m => ({
+                    materialId: m.materialId,
+                    title: m.title,
+                    content: m.contentMd || null,
+                    contentMd: m.contentMd || null,
+                    source: 'published',
+                    publishedAt: m.publishedAt || null
+                }));
+                return res.json({ success: true, materials: mapped, source: 'published' });
+            }
+        } catch (err) {
+            console.warn('[GDPR] Failed to load published materials, falling back:', err.message);
+        }
+        try {
             const rows = (sqliteDb && sqliteDb.prepare)
-                ? sqliteDb.prepare(`SELECT * FROM materials WHERE hearing_id=? ORDER BY idx ASC`).all(hearingId)
+                ? sqliteDb.prepare(`SELECT * FROM raw_materials WHERE hearing_id=? ORDER BY idx ASC`).all(hearingId)
                 : [];
             let materials = (rows || []).map(m => ({ type: m.type, title: m.title, url: m.url, content: m.content }));
             if (!materials || materials.length === 0) {
@@ -3798,11 +4192,32 @@ app.get('/api/summarize/:id', async (req, res) => {
         const materialMd = materialParts.join('\n');
         fs.writeFileSync(materialMdPath, materialMd, 'utf8');
 
+        let vectorContextText = '';
+        const VECTOR_LIMIT = Number(process.env.VECTOR_CONTEXT_LIMIT || 6000);
+        try {
+            let chunks = listVectorChunks(Number(hearingId));
+            if ((!chunks || !chunks.length) && openai) {
+                await rebuildLocalVectorStore(Number(hearingId));
+                chunks = listVectorChunks(Number(hearingId));
+            }
+            if (chunks && chunks.length) {
+                const topChunks = chunks
+                    .slice(0, 24)
+                    .map((item, idx) => `### Kilde ${idx + 1} (${item.source || 'ukendt'})\n${item.content}`);
+                vectorContextText = topChunks.join('\n\n');
+                if (vectorContextText.length > VECTOR_LIMIT) {
+                    vectorContextText = vectorContextText.slice(0, VECTOR_LIMIT);
+                }
+            }
+        } catch (err) {
+            console.warn('[VectorStore] kunne ikke hente kontekst:', err.message);
+        }
+
         const systemPrompt = 'Du er en erfaren dansk fuldmægtig. Følg instruktionerne præcist.';
         const promptTemplate = readTextFileSafe(PROMPT_PATH) || '# Opgave\nSkriv en tematiseret opsummering baseret på materialet.';
         const RESP_LIMIT = Number(process.env.RESP_CHAR_LIMIT || 200000);
         const MAT_LIMIT = Number(process.env.MAT_CHAR_LIMIT || 120000);
-        const userPrompt = `${promptTemplate}\n\n[Samlede Høringssvar]\n\n${String(repliesText || '').slice(0, RESP_LIMIT)}\n\n[Høringsmateriale] \n\n${materialMd.slice(0, MAT_LIMIT)}`;
+        const userPrompt = `${promptTemplate}\n\n[Samlede Høringssvar]\n\n${String(repliesText || '').slice(0, RESP_LIMIT)}\n\n[Høringsmateriale]\n\n${materialMd.slice(0, MAT_LIMIT)}${vectorContextText ? `\n\n[Udvalgte kontekstafsnit]\n\n${vectorContextText}` : ''}`;
         logDebug(`[summarize] Constructed user prompt of length ${userPrompt.length}.`);
 
         if (userPrompt.length < 200) { // Arbitrary small length check
@@ -4928,6 +5343,707 @@ app.get('/api/test-docx', async (req, res) => {
     }
 });
 
+// GDPR preparation endpoints
+app.get('/api/gdpr/hearings', (req, res) => {
+    try {
+        ensurePreparedResponsesForAllHearings();
+        const hearings = listPreparedHearings();
+        res.json({ success: true, hearings });
+    } catch (error) {
+        console.error('[GDPR] list hearings failed:', error);
+        res.status(500).json({ success: false, error: 'Kunne ikke hente oversigt' });
+    }
+});
+
+app.get('/api/gdpr/hearing/:id', (req, res) => {
+    const hearingId = toInt(req.params.id);
+    if (!hearingId) return res.status(400).json({ success: false, error: 'Ugyldigt hørings-ID' });
+    try {
+        ensurePreparedResponsesFromRaw(hearingId);
+        const bundle = getPreparedBundle(hearingId);
+        if (!bundle) return res.status(404).json({ success: false, error: 'Høring ikke fundet' });
+        res.json({ success: true, ...bundle });
+    } catch (error) {
+        console.error('[GDPR] load bundle failed:', error);
+        res.status(500).json({ success: false, error: 'Kunne ikke indlæse høring' });
+    }
+});
+
+app.post('/api/gdpr/hearing/:id/state', express.json({ limit: '512kb' }), (req, res) => {
+    const hearingId = toInt(req.params.id);
+    if (!hearingId) return res.status(400).json({ success: false, error: 'Ugyldigt hørings-ID' });
+    try {
+        const patch = {};
+        if (req.body && typeof req.body === 'object') {
+            if (Object.prototype.hasOwnProperty.call(req.body, 'status')) patch.status = String(req.body.status || '').trim() || undefined;
+            if (Object.prototype.hasOwnProperty.call(req.body, 'preparedBy')) patch.prepared_by = String(req.body.preparedBy || '').trim() || null;
+            if (Object.prototype.hasOwnProperty.call(req.body, 'notes')) patch.notes = String(req.body.notes || '').trim() || null;
+            if (Object.prototype.hasOwnProperty.call(req.body, 'vectorStoreId')) patch.vector_store_id = req.body.vectorStoreId ? String(req.body.vectorStoreId) : null;
+            if (Object.prototype.hasOwnProperty.call(req.body, 'vectorStoreUpdatedAt')) patch.vector_store_updated_at = toInt(req.body.vectorStoreUpdatedAt, null);
+            if (Object.prototype.hasOwnProperty.call(req.body, 'publishedAt')) patch.published_at = toInt(req.body.publishedAt, null);
+        }
+        const state = updatePreparationState(hearingId, patch);
+        res.json({ success: true, state });
+    } catch (error) {
+        console.error('[GDPR] update state failed:', error);
+        res.status(500).json({ success: false, error: 'Kunne ikke opdatere status' });
+    }
+});
+
+app.post('/api/gdpr/hearing/:id/responses', express.json({ limit: '5mb' }), (req, res) => {
+    const hearingId = toInt(req.params.id);
+    if (!hearingId) return res.status(400).json({ success: false, error: 'Ugyldigt hørings-ID' });
+    const body = req.body || {};
+    try {
+        let preparedId = toInt(body.preparedId, null);
+        if (!preparedId) preparedId = allocatePreparedResponseId(hearingId);
+        const payload = {
+            sourceResponseId: toInt(body.sourceResponseId, null),
+            respondentName: body.respondentName ?? null,
+            respondentType: body.respondentType ?? null,
+            author: body.author ?? null,
+            organization: body.organization ?? null,
+            onBehalfOf: body.onBehalfOf ?? null,
+            submittedAt: body.submittedAt ?? null,
+            textMd: body.textMd ?? body.text ?? '',
+            hasAttachments: !!body.hasAttachments,
+            attachmentsReady: !!body.attachmentsReady,
+            approved: !!body.approved,
+            approvedAt: toInt(body.approvedAt, null),
+            notes: body.notes ?? null
+        };
+        const result = upsertPreparedResponse(hearingId, preparedId, payload);
+        res.json({ success: true, preparedId, state: result?.state || recalcPreparationProgress(hearingId) });
+    } catch (error) {
+        console.error('[GDPR] upsert response failed:', error);
+        res.status(500).json({ success: false, error: 'Kunne ikke gemme høringssvar' });
+    }
+});
+
+app.delete('/api/gdpr/hearing/:id/responses/:preparedId', (req, res) => {
+    const hearingId = toInt(req.params.id);
+    const preparedId = toInt(req.params.preparedId);
+    if (!hearingId || !preparedId) return res.status(400).json({ success: false, error: 'Ugyldige parametre' });
+    try {
+        const state = deletePreparedResponse(hearingId, preparedId);
+        res.json({ success: true, state });
+    } catch (error) {
+        console.error('[GDPR] delete prepared response failed:', error);
+        res.status(500).json({ success: false, error: 'Kunne ikke slette høringssvar' });
+    }
+});
+
+app.post('/api/gdpr/hearing/:id/responses/:preparedId/attachments', express.json({ limit: '10mb' }), (req, res) => {
+    const hearingId = toInt(req.params.id);
+    const preparedId = toInt(req.params.preparedId);
+    if (!hearingId || !preparedId) return res.status(400).json({ success: false, error: 'Ugyldige parametre' });
+    try {
+        const body = req.body || {};
+        let attachmentId = toInt(body.attachmentId, null);
+        if (!attachmentId) attachmentId = allocatePreparedAttachmentId(hearingId, preparedId);
+        const payload = {
+            sourceAttachmentIdx: toInt(body.sourceAttachmentIdx, null),
+            originalFilename: body.originalFilename ?? null,
+            sourceUrl: body.sourceUrl ?? null,
+            convertedMd: body.convertedMd ?? null,
+            conversionStatus: body.conversionStatus ?? null,
+            approved: !!body.approved,
+            approvedAt: toInt(body.approvedAt, null),
+            notes: body.notes ?? null
+        };
+        const state = upsertPreparedAttachment(hearingId, preparedId, attachmentId, payload);
+        res.json({ success: true, attachmentId, state });
+    } catch (error) {
+        console.error('[GDPR] upsert attachment failed:', error);
+        res.status(500).json({ success: false, error: 'Kunne ikke gemme vedhæftning' });
+    }
+});
+
+app.delete('/api/gdpr/hearing/:id/responses/:preparedId/attachments/:attachmentId', (req, res) => {
+    const hearingId = toInt(req.params.id);
+    const preparedId = toInt(req.params.preparedId);
+    const attachmentId = toInt(req.params.attachmentId);
+    if (!hearingId || !preparedId || !attachmentId) return res.status(400).json({ success: false, error: 'Ugyldige parametre' });
+    try {
+        const state = deletePreparedAttachment(hearingId, preparedId, attachmentId);
+        res.json({ success: true, state });
+    } catch (error) {
+        console.error('[GDPR] delete attachment failed:', error);
+        res.status(500).json({ success: false, error: 'Kunne ikke slette vedhæftning' });
+    }
+});
+
+app.post('/api/gdpr/hearing/:id/responses/:preparedId/reset', async (req, res) => {
+    const hearingId = toInt(req.params.id);
+    const preparedId = toInt(req.params.preparedId);
+    if (!hearingId || !preparedId) return res.status(400).json({ success: false, error: 'Ugyldige parametre' });
+    // Get live db reference
+    const db = sqliteModule ? sqliteModule.db : sqliteDb;
+    if (!db || typeof db.prepare !== 'function') {
+        return res.status(500).json({ success: false, error: 'Database utilgængelig' });
+    }
+    try {
+        ensurePreparedResponsesFromRaw(hearingId);
+    } catch (error) {
+        console.warn('[GDPR] ensurePreparedResponsesFromRaw (reset single) failed:', error?.message || error);
+    }
+    try {
+        const preparedRow = db.prepare(`
+            SELECT prepared_id as preparedId, source_response_id as sourceResponseId
+            FROM prepared_responses
+            WHERE hearing_id=? AND prepared_id=?
+        `).get(hearingId, preparedId);
+        if (!preparedRow) {
+            return res.status(404).json({ success: false, error: 'Klargjort svar ikke fundet' });
+        }
+        const sourceId = toInt(preparedRow.sourceResponseId);
+        if (!sourceId) {
+            return res.status(400).json({ success: false, error: 'Dette svar kan ikke nulstilles automatisk' });
+        }
+
+        let raw = db.prepare(`
+            SELECT response_id as responseId, text, author, organization, on_behalf_of as onBehalfOf, submitted_at as submittedAt
+            FROM raw_responses
+            WHERE hearing_id=? AND response_id=?
+        `).get(hearingId, sourceId);
+
+        if (!raw) {
+            try { await hydrateHearingDirect(hearingId); } catch (error) { console.warn('[GDPR] hydrate during reset single failed:', error?.message || error); }
+            raw = db.prepare(`
+                SELECT response_id as responseId, text, author, organization, on_behalf_of as onBehalfOf, submitted_at as submittedAt
+                FROM raw_responses
+                WHERE hearing_id=? AND response_id=?
+            `).get(hearingId, sourceId);
+        }
+
+        if (!raw) {
+            return res.status(404).json({ success: false, error: 'Originalt svar kunne ikke findes' });
+        }
+
+        const clearAttachments = db.transaction(() => {
+            db.prepare(`DELETE FROM prepared_attachments WHERE hearing_id=? AND prepared_id=?`).run(hearingId, preparedId);
+        });
+        clearAttachments();
+
+        const rawAttachments = db.prepare(`
+            SELECT idx as attachmentIdx, filename, url
+            FROM raw_attachments
+            WHERE hearing_id=? AND response_id=?
+            ORDER BY idx ASC
+        `).all(hearingId, sourceId) || [];
+
+        upsertPreparedResponse(hearingId, preparedId, {
+            sourceResponseId: sourceId,
+            respondentName: 'Borger', // Standard skal være "Borger" - ikke bruge navne fra blivhørt
+            respondentType: 'Borger', // Standard skal være "Borger"
+            author: raw.author || null,
+            organization: raw.organization || null,
+            onBehalfOf: raw.onBehalfOf || null,
+            submittedAt: raw.submittedAt || null,
+            textMd: raw.text || '',
+            hasAttachments: rawAttachments.length > 0,
+            attachmentsReady: false,
+            approved: false,
+            notes: null
+        });
+
+        rawAttachments.forEach((attachment, idx) => {
+            const attachmentId = allocatePreparedAttachmentId(hearingId, preparedId);
+            const rawIdx = Number(attachment.attachmentIdx);
+            upsertPreparedAttachment(hearingId, preparedId, attachmentId, {
+                sourceAttachmentIdx: Number.isFinite(rawIdx) ? rawIdx : idx,
+                originalFilename: attachment.filename || `Bilag ${idx + 1}`,
+                sourceUrl: attachment.url || null,
+                convertedMd: null,
+                conversionStatus: null,
+                approved: false,
+                notes: null
+            });
+        });
+
+        const bundle = getPreparedBundle(hearingId);
+        return res.json({ success: true, bundle });
+    } catch (error) {
+        console.error('[GDPR] reset prepared response failed:', error);
+        res.status(500).json({ success: false, error: 'Kunne ikke nulstille svar' });
+    }
+});
+
+app.post('/api/gdpr/hearing/:id/refresh-raw', async (req, res) => {
+    const hearingId = toInt(req.params.id);
+    if (!hearingId) return res.status(400).json({ success: false, error: 'Ugyldigt hørings-ID' });
+    // Get live db reference
+    const db = sqliteModule ? sqliteModule.db : sqliteDb;
+    if (!db || typeof db.prepare !== 'function') {
+        return res.status(500).json({ success: false, error: 'Database utilgængelig' });
+    }
+    try {
+        // Fetch fresh raw data from blivhørt
+        await hydrateHearingDirect(hearingId);
+        
+        // Get existing approved prepared responses to preserve
+        const existingApproved = db.prepare(`
+            SELECT prepared_id, source_response_id, approved, approved_at
+            FROM prepared_responses
+            WHERE hearing_id=? AND approved=1
+        `).all(hearingId);
+        
+        const approvedBySourceId = new Map();
+        for (const row of existingApproved) {
+            if (row.source_response_id !== null && row.source_response_id !== undefined) {
+                approvedBySourceId.set(Number(row.source_response_id), {
+                    preparedId: row.prepared_id,
+                    approvedAt: row.approved_at
+                });
+            }
+        }
+        
+        // Ensure prepared responses exist for all raw responses
+        // This will only create new ones, not overwrite existing
+        ensurePreparedResponsesFromRaw(hearingId);
+        
+        // Restore approved status for previously approved responses
+        if (approvedBySourceId.size > 0) {
+            const tx = db.transaction(() => {
+                for (const [sourceId, info] of approvedBySourceId.entries()) {
+                    // Find the prepared response for this source
+                    const prepared = db.prepare(`
+                        SELECT prepared_id FROM prepared_responses
+                        WHERE hearing_id=? AND source_response_id=?
+                        ORDER BY prepared_id ASC LIMIT 1
+                    `).get(hearingId, sourceId);
+                    
+                    if (prepared) {
+                        // Restore approved status
+                        db.prepare(`
+                            UPDATE prepared_responses
+                            SET approved=1, approved_at=?
+                            WHERE hearing_id=? AND prepared_id=?
+                        `).run(info.approvedAt || Date.now(), hearingId, prepared.prepared_id);
+                    }
+                }
+            });
+            tx();
+        }
+        
+        // Recalculate progress
+        recalcPreparationProgress(hearingId);
+        
+        // Automatically rebuild vector store if there are approved responses
+        // This ensures AI summarization has the latest approved content
+        const approvedCount = db.prepare(`SELECT COUNT(*) as c FROM prepared_responses WHERE hearing_id=? AND approved=1`).get(hearingId)?.c || 0;
+        if (approvedCount > 0) {
+            try {
+                // Rebuild vector store in background (don't await)
+                setImmediate(async () => {
+                    try {
+                        await rebuildLocalVectorStore(hearingId);
+                    } catch (err) {
+                        console.warn('[GDPR] auto-rebuild vector store failed:', err.message);
+                    }
+                });
+            } catch (err) {
+                console.warn('[GDPR] failed to queue vector rebuild:', err.message);
+            }
+        }
+        
+        const bundle = getPreparedBundle(hearingId);
+        if (!bundle) return res.status(404).json({ success: false, error: 'Høring ikke fundet' });
+        res.json({ success: true, bundle });
+    } catch (error) {
+        console.error('[GDPR] refresh raw failed:', error);
+        res.status(500).json({ success: false, error: 'Kunne ikke opdatere fra blivhørt' });
+    }
+});
+
+app.post('/api/gdpr/hearing/:id/cleanup-duplicates', async (req, res) => {
+    const hearingId = toInt(req.params.id);
+    if (!hearingId) return res.status(400).json({ success: false, error: 'Ugyldigt hørings-ID' });
+    // Get live db reference
+    const db = sqliteModule ? sqliteModule.db : sqliteDb;
+    if (!db || typeof db.prepare !== 'function') {
+        return res.status(500).json({ success: false, error: 'Database utilgængelig' });
+    }
+    try {
+        // Find and remove duplicates - keep only one prepared response per source_response_id
+        const duplicates = db.prepare(`
+            SELECT source_response_id, COUNT(*) as count, MIN(prepared_id) as keep_id
+            FROM prepared_responses
+            WHERE hearing_id=? AND source_response_id IS NOT NULL
+            GROUP BY hearing_id, source_response_id
+            HAVING COUNT(*) > 1
+        `).all(hearingId);
+        
+        let deletedCount = 0;
+        if (duplicates.length > 0) {
+            const tx = db.transaction(() => {
+                for (const dup of duplicates) {
+                    // Get IDs to delete (all except the one to keep)
+                    const toDelete = db.prepare(`
+                        SELECT prepared_id FROM prepared_responses
+                        WHERE hearing_id=? AND source_response_id=? AND prepared_id != ?
+                    `).all(hearingId, dup.source_response_id, dup.keep_id);
+                    
+                    for (const row of toDelete) {
+                        // Delete attachments first
+                        db.prepare(`DELETE FROM prepared_attachments WHERE hearing_id=? AND prepared_id=?`).run(hearingId, row.prepared_id);
+                        // Then delete the response
+                        db.prepare(`DELETE FROM prepared_responses WHERE hearing_id=? AND prepared_id=?`).run(hearingId, row.prepared_id);
+                        deletedCount++;
+                    }
+                }
+            });
+            tx();
+        }
+
+        // Also remove orphaned prepared responses (those without a source_response_id that matches a raw response)
+        const rawIds = db.prepare(`SELECT response_id FROM raw_responses WHERE hearing_id=?`).all(hearingId).map(r => r.response_id);
+        if (rawIds.length > 0) {
+            const placeholders = rawIds.map(() => '?').join(',');
+            const orphaned = db.prepare(`
+                SELECT prepared_id FROM prepared_responses
+                WHERE hearing_id=? AND (source_response_id IS NULL OR source_response_id NOT IN (${placeholders}))
+            `).all(hearingId, ...rawIds);
+            
+            if (orphaned.length > 0) {
+                const tx = db.transaction(() => {
+                    for (const row of orphaned) {
+                        db.prepare(`DELETE FROM prepared_attachments WHERE hearing_id=? AND prepared_id=?`).run(hearingId, row.prepared_id);
+                        db.prepare(`DELETE FROM prepared_responses WHERE hearing_id=? AND prepared_id=?`).run(hearingId, row.prepared_id);
+                        deletedCount++;
+                    }
+                });
+                tx();
+            }
+        } else {
+            // If no raw responses exist, remove all prepared responses without source_response_id
+            const orphaned = db.prepare(`
+                SELECT prepared_id FROM prepared_responses
+                WHERE hearing_id=? AND source_response_id IS NULL
+            `).all(hearingId);
+            
+            if (orphaned.length > 0) {
+                const tx = db.transaction(() => {
+                    for (const row of orphaned) {
+                        db.prepare(`DELETE FROM prepared_attachments WHERE hearing_id=? AND prepared_id=?`).run(hearingId, row.prepared_id);
+                        db.prepare(`DELETE FROM prepared_responses WHERE hearing_id=? AND prepared_id=?`).run(hearingId, row.prepared_id);
+                        deletedCount++;
+                    }
+                });
+                tx();
+            }
+        }
+
+        // Recalculate progress
+        recalcPreparationProgress(hearingId);
+        
+        const bundle = getPreparedBundle(hearingId);
+        res.json({ success: true, deletedCount, bundle });
+    } catch (error) {
+        console.error('[GDPR] cleanup duplicates failed:', error);
+        res.status(500).json({ success: false, error: 'Kunne ikke rydde duplikater' });
+    }
+});
+
+app.post('/api/gdpr/hearing/:id/reset', async (req, res) => {
+    const hearingId = toInt(req.params.id);
+    if (!hearingId) return res.status(400).json({ success: false, error: 'Ugyldigt hørings-ID' });
+    try {
+        await hydrateHearingDirect(hearingId);
+    } catch (error) {
+        console.warn('[GDPR] hydrate during reset failed:', error?.message || error);
+    }
+    // Get live db reference
+    const db = sqliteModule ? sqliteModule.db : sqliteDb;
+    if (!db || typeof db.prepare !== 'function') {
+        return res.status(500).json({ success: false, error: 'Database utilgængelig' });
+    }
+    try {
+        const tx = db.transaction(() => {
+            db.prepare(`DELETE FROM prepared_attachments WHERE hearing_id=?`).run(hearingId);
+            db.prepare(`DELETE FROM prepared_responses WHERE hearing_id=?`).run(hearingId);
+            db.prepare(`DELETE FROM prepared_materials WHERE hearing_id=?`).run(hearingId);
+        });
+        tx();
+    } catch (error) {
+        console.error('[GDPR] reset hearing cleanup failed:', error);
+        return res.status(500).json({ success: false, error: 'Kunne ikke rydde klargjorte data' });
+    }
+    try {
+        ensurePreparedResponsesFromRaw(hearingId);
+        // Cleanup duplicates after ensuring prepared responses (in case duplicates were created)
+        const duplicates = db.prepare(`
+            SELECT source_response_id, COUNT(*) as count, MIN(prepared_id) as keep_id
+            FROM prepared_responses
+            WHERE hearing_id=? AND source_response_id IS NOT NULL
+            GROUP BY hearing_id, source_response_id
+            HAVING COUNT(*) > 1
+        `).all(hearingId);
+        if (duplicates.length > 0) {
+            const cleanupTx = db.transaction(() => {
+                for (const dup of duplicates) {
+                    const toDelete = db.prepare(`
+                        SELECT prepared_id FROM prepared_responses
+                        WHERE hearing_id=? AND source_response_id=? AND prepared_id != ?
+                    `).all(hearingId, dup.source_response_id, dup.keep_id);
+                    for (const row of toDelete) {
+                        db.prepare(`DELETE FROM prepared_attachments WHERE hearing_id=? AND prepared_id=?`).run(hearingId, row.prepared_id);
+                        db.prepare(`DELETE FROM prepared_responses WHERE hearing_id=? AND prepared_id=?`).run(hearingId, row.prepared_id);
+                    }
+                }
+            });
+            cleanupTx();
+        }
+    } catch (error) {
+        console.warn('[GDPR] ensurePreparedResponsesFromRaw during reset failed:', error?.message || error);
+    }
+    try {
+        recalcPreparationProgress(hearingId);
+        updatePreparationState(hearingId, { status: 'draft', responses_ready: 0, materials_ready: 0, published_at: null, last_modified_at: Date.now() });
+    } catch (error) {
+        console.warn('[GDPR] reset hearing state update failed:', error?.message || error);
+    }
+    const bundle = getPreparedBundle(hearingId);
+    if (!bundle) return res.status(404).json({ success: false, error: 'Høring ikke fundet' });
+    res.json({ success: true, bundle });
+});
+
+app.post('/api/gdpr/hearing/:id/materials', express.json({ limit: '10mb' }), (req, res) => {
+    const hearingId = toInt(req.params.id);
+    if (!hearingId) return res.status(400).json({ success: false, error: 'Ugyldigt hørings-ID' });
+    try {
+        const body = req.body || {};
+        let materialId = toInt(body.materialId, null);
+        if (!materialId) materialId = allocatePreparedMaterialId(hearingId);
+        const payload = {
+            title: body.title ?? null,
+            sourceFilename: body.sourceFilename ?? null,
+            sourceUrl: body.sourceUrl ?? null,
+            contentMd: body.contentMd ?? body.content ?? null,
+            uploadedPath: body.uploadedPath ?? null,
+            approved: !!body.approved,
+            approvedAt: toInt(body.approvedAt, null),
+            notes: body.notes ?? null
+        };
+        const state = upsertPreparedMaterial(hearingId, materialId, payload);
+        res.json({ success: true, materialId, state });
+    } catch (error) {
+        console.error('[GDPR] upsert material failed:', error);
+        res.status(500).json({ success: false, error: 'Kunne ikke gemme materiale' });
+    }
+});
+
+app.delete('/api/gdpr/hearing/:id/materials/:materialId', (req, res) => {
+    const hearingId = toInt(req.params.id);
+    const materialId = toInt(req.params.materialId);
+    if (!hearingId || !materialId) return res.status(400).json({ success: false, error: 'Ugyldige parametre' });
+    try {
+        const state = deletePreparedMaterial(hearingId, materialId);
+        res.json({ success: true, state });
+    } catch (error) {
+        console.error('[GDPR] delete material failed:', error);
+        res.status(500).json({ success: false, error: 'Kunne ikke slette materiale' });
+    }
+});
+
+app.post('/api/gdpr/hearing/:id/responses/:preparedId/attachments/:attachmentId/convert', express.json({ limit: '1mb' }), async (req, res) => {
+    const hearingId = toInt(req.params.id);
+    const preparedId = toInt(req.params.preparedId);
+    const attachmentId = toInt(req.params.attachmentId);
+    if (!hearingId || !preparedId || !attachmentId) return res.status(400).json({ success: false, error: 'Ugyldige parametre' });
+    let workingPath = null;
+    let cleanupPath = false;
+    let originalFilename = null;
+    const body = req.body || {};
+    try {
+        let sourceUrl = body.sourceUrl ? String(body.sourceUrl).trim() : null;
+        if (!sourceUrl && Object.prototype.hasOwnProperty.call(body, 'rawAttachmentIdx')) {
+            const rawIdx = toInt(body.rawAttachmentIdx, null);
+            if (rawIdx !== null && sqliteDb && sqliteDb.prepare) {
+                const linkRow = sqliteDb.prepare(`SELECT source_response_id FROM prepared_responses WHERE hearing_id=? AND prepared_id=?`).get(hearingId, preparedId);
+                const sourceResponseId = linkRow?.source_response_id;
+                if (sourceResponseId !== undefined && sourceResponseId !== null) {
+                    const rawRow = sqliteDb.prepare(`SELECT url, filename FROM raw_attachments WHERE hearing_id=? AND response_id=? AND idx=?`).get(hearingId, sourceResponseId, rawIdx);
+                    if (rawRow) {
+                        sourceUrl = rawRow.url || sourceUrl;
+                        originalFilename = rawRow.filename || originalFilename;
+                    }
+                }
+            }
+        }
+
+        if (body.uploadedPath) {
+            const candidate = path.resolve(String(body.uploadedPath));
+            if (fs.existsSync(candidate)) {
+                workingPath = candidate;
+            }
+        }
+
+        if (!workingPath) {
+            if (!sourceUrl) {
+                return res.status(400).json({ success: false, error: 'Ingen kilde til konvertering angivet' });
+            }
+            const response = await axios.get(sourceUrl, { responseType: 'arraybuffer', timeout: 60000, validateStatus: () => true });
+            if (response.status >= 400 || !response.data) {
+                return res.status(response.status || 500).json({ success: false, error: 'Kunne ikke hente vedhæftning' });
+            }
+            const data = Buffer.from(response.data);
+            const extGuess = (sourceUrl.split('?')[0] || '').split('.');
+            const ext = extGuess.length > 1 ? extGuess.pop() : 'pdf';
+            const tmpFile = path.join(ensureTmpDir(), `attachment_${Date.now()}.${ext || 'pdf'}`);
+            fs.writeFileSync(tmpFile, data);
+            workingPath = tmpFile;
+            cleanupPath = true;
+        }
+
+        const result = await convertFileToMarkdown(workingPath, { includeMetadata: true });
+        const markdown = result?.markdown || '';
+        const payload = {
+            originalFilename: originalFilename || body.originalFilename || path.basename(workingPath),
+            convertedMd: markdown,
+            conversionStatus: 'converted',
+            approved: !!body.approved,
+            notes: body.notes ?? null
+        };
+        const state = upsertPreparedAttachment(hearingId, preparedId, attachmentId, payload);
+        try {
+            if (sqliteDb && sqliteDb.prepare) {
+                sqliteDb.prepare(`UPDATE prepared_responses SET has_attachments=1, attachments_ready=1, updated_at=? WHERE hearing_id=? AND prepared_id=?`).run(Date.now(), hearingId, preparedId);
+            }
+        } catch (err) {
+            console.warn('[GDPR] failed to mark attachments ready:', err.message);
+        }
+        res.json({ success: true, attachmentId, markdown, metadata: result?.metadata || null, state });
+    } catch (error) {
+        console.error('[GDPR] convert attachment failed:', error);
+        res.status(500).json({ success: false, error: 'Konvertering mislykkedes', detail: error.message });
+    } finally {
+        if (cleanupPath && workingPath) {
+            try { fs.unlinkSync(workingPath); } catch (_) {}
+        }
+    }
+});
+
+app.post('/api/gdpr/hearing/:id/materials/upload', gdprMaterialUpload.single('file'), async (req, res) => {
+    const hearingId = toInt(req.params.id);
+    if (!hearingId) return res.status(400).json({ success: false, error: 'Ugyldigt hørings-ID' });
+    const file = req.file;
+    if (!file) return res.status(400).json({ success: false, error: 'Ingen fil modtaget' });
+    const filePath = file.path;
+    try {
+        const ext = path.extname(file.originalname || '').toLowerCase();
+        let markdown = '';
+        let metadata = null;
+        if (ext === '.md' || ext === '.markdown' || ext === '.txt') {
+            markdown = fs.readFileSync(filePath, 'utf-8');
+        } else {
+            const result = await convertFileToMarkdown(filePath, { includeMetadata: true });
+            markdown = result?.markdown || '';
+            metadata = result?.metadata || null;
+        }
+        res.json({
+            success: true,
+            originalName: file.originalname,
+            storedPath: filePath,
+            mimeType: file.mimetype,
+            size: file.size,
+            contentMd: markdown,
+            metadata
+        });
+    } catch (error) {
+        console.error('[GDPR] material upload conversion failed:', error);
+        res.status(500).json({ success: false, error: 'Konvertering mislykkedes', detail: error.message });
+    }
+});
+
+app.post('/api/gdpr/hearing/:id/vector-store/rebuild', async (req, res) => {
+    const hearingId = toInt(req.params.id);
+    if (!hearingId) return res.status(400).json({ success: false, error: 'Ugyldigt hørings-ID' });
+    try {
+        const result = await rebuildLocalVectorStore(hearingId);
+        res.json({ success: true, ...result });
+    } catch (error) {
+        console.error('[GDPR] rebuild vector store failed:', error);
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+app.delete('/api/gdpr/hearing/:id', async (req, res) => {
+    const hearingId = toInt(req.params.id);
+    if (!hearingId) return res.status(400).json({ success: false, error: 'Ugyldigt hørings-ID' });
+    // Get live db reference
+    const db = sqliteModule ? sqliteModule.db : sqliteDb;
+    if (!db || typeof db.prepare !== 'function') {
+        return res.status(500).json({ success: false, error: 'Database utilgængelig' });
+    }
+    try {
+        const tx = db.transaction(() => {
+            // Delete all related data
+            db.prepare(`DELETE FROM vector_chunks WHERE hearing_id=?`).run(hearingId);
+            db.prepare(`DELETE FROM hearing_preparation_state WHERE hearing_id=?`).run(hearingId);
+            db.prepare(`DELETE FROM published_materials WHERE hearing_id=?`).run(hearingId);
+            db.prepare(`DELETE FROM published_attachments WHERE hearing_id=?`).run(hearingId);
+            db.prepare(`DELETE FROM published_responses WHERE hearing_id=?`).run(hearingId);
+            db.prepare(`DELETE FROM prepared_materials WHERE hearing_id=?`).run(hearingId);
+            db.prepare(`DELETE FROM prepared_attachments WHERE hearing_id=?`).run(hearingId);
+            db.prepare(`DELETE FROM prepared_responses WHERE hearing_id=?`).run(hearingId);
+            db.prepare(`DELETE FROM raw_materials WHERE hearing_id=?`).run(hearingId);
+            db.prepare(`DELETE FROM raw_attachments WHERE hearing_id=?`).run(hearingId);
+            db.prepare(`DELETE FROM raw_responses WHERE hearing_id=?`).run(hearingId);
+            db.prepare(`DELETE FROM hearings WHERE id=?`).run(hearingId);
+        });
+        tx();
+        res.json({ success: true });
+    } catch (error) {
+        console.error('[GDPR] delete hearing failed:', error);
+        res.status(500).json({ success: false, error: 'Kunne ikke slette høring' });
+    }
+});
+
+app.delete('/api/gdpr/hearing/:id/published', async (req, res) => {
+    const hearingId = toInt(req.params.id);
+    if (!hearingId) return res.status(400).json({ success: false, error: 'Ugyldigt hørings-ID' });
+    // Get live db reference
+    const db = sqliteModule ? sqliteModule.db : sqliteDb;
+    if (!db || typeof db.prepare !== 'function') {
+        return res.status(500).json({ success: false, error: 'Database utilgængelig' });
+    }
+    try {
+        const tx = db.transaction(() => {
+            db.prepare(`DELETE FROM published_responses WHERE hearing_id=?`).run(hearingId);
+            db.prepare(`DELETE FROM published_attachments WHERE hearing_id=?`).run(hearingId);
+            db.prepare(`DELETE FROM published_materials WHERE hearing_id=?`).run(hearingId);
+        });
+        tx();
+        // Update preparation state to remove published_at
+        updatePreparationState(hearingId, { published_at: null });
+        res.json({ success: true });
+    } catch (error) {
+        console.error('[GDPR] delete published failed:', error);
+        res.status(500).json({ success: false, error: 'Kunne ikke slette publicerede data' });
+    }
+});
+
+app.post('/api/gdpr/hearing/:id/publish', express.json({ limit: '1mb' }), async (req, res) => {
+    const hearingId = toInt(req.params.id);
+    if (!hearingId) return res.status(400).json({ success: false, error: 'Ugyldigt hørings-ID' });
+    try {
+        const onlyApproved = req.body && Object.prototype.hasOwnProperty.call(req.body, 'onlyApproved')
+            ? !!req.body.onlyApproved
+            : true;
+        const state = publishPreparedHearing(hearingId, { onlyApproved });
+        try {
+            await rebuildLocalVectorStore(hearingId);
+        } catch (err) {
+            console.warn('[GDPR] vector store rebuild efter publicering fejlede:', err.message);
+        }
+        res.json({ success: true, state });
+    } catch (error) {
+        console.error('[GDPR] publish failed:', error);
+        res.status(500).json({ success: false, error: 'Kunne ikke publicere høring' });
+    }
+});
+
 // Latest variants for a hearing (from the most recent job), for robust client fallback
 app.get('/api/hearing/:id/variants/latest', (req, res) => {
     try {
@@ -5106,6 +6222,10 @@ app.get('/api/db-status', (req, res) => {
             hearingCount: 0,
             responseCount: 0,
             materialCount: 0,
+            rawResponseCount: 0,
+            publishedResponseCount: 0,
+            rawMaterialCount: 0,
+            publishedMaterialCount: 0,
             lastHearingUpdate: null,
             error: null,
             fileExists: fs.existsSync(dbPath),
@@ -5121,8 +6241,12 @@ app.get('/api/db-status', (req, res) => {
             try {
                 status.dbExists = true;
                 status.hearingCount = currentDb.prepare('SELECT COUNT(*) as count FROM hearings').get().count;
-                status.responseCount = currentDb.prepare('SELECT COUNT(*) as count FROM responses').get().count;
-                status.materialCount = currentDb.prepare('SELECT COUNT(*) as count FROM materials').get().count;
+                status.rawResponseCount = currentDb.prepare('SELECT COUNT(*) as count FROM raw_responses').get().count;
+                status.publishedResponseCount = currentDb.prepare('SELECT COUNT(*) as count FROM published_responses').get().count;
+                status.responseCount = status.publishedResponseCount || status.rawResponseCount;
+                status.rawMaterialCount = currentDb.prepare('SELECT COUNT(*) as count FROM raw_materials').get().count;
+                status.publishedMaterialCount = currentDb.prepare('SELECT COUNT(*) as count FROM published_materials').get().count;
+                status.materialCount = status.publishedMaterialCount || status.rawMaterialCount;
                 
                 const lastUpdate = currentDb.prepare('SELECT MAX(updated_at) as last FROM hearings').get();
                 status.lastHearingUpdate = lastUpdate.last ? new Date(lastUpdate.last).toISOString() : null;
@@ -5752,10 +6876,35 @@ async function hydrateHearingDirect(hearingId) {
             } catch {}
         }
 
+        const derivedTotalPages = viaApi.totalPages || totalPages || null;
+        if (PERSIST_ALWAYS_WRITE) {
+            try {
+                const existingMeta = readPersistedHearingWithMeta(hearingId);
+                const existing = existingMeta?.data || null;
+                const snapshot = mergePersistPayload(existing, {
+                    success: true,
+                    hearing,
+                    responses: normalizedResponses,
+                    materials,
+                    totalResponses: normalizedResponses.length,
+                    totalPages: derivedTotalPages || undefined
+                });
+                writePersistedHearing(hearingId, snapshot);
+            } catch (persistErr) {
+                console.warn(`[hydrate] failed to persist snapshot for ${hearingId}:`, persistErr?.message || persistErr);
+            }
+        }
+
         try { upsertHearing(hearing); replaceResponses(hearing.id, normalizedResponses); replaceMaterials(hearing.id, materials); } catch {}
         const sig = snapshotSignature({ responses: normalizedResponses, materials });
         try { markHearingComplete(hearing.id, sig, normalizedResponses.length, materials.length); } catch {}
-        return { success: true, hearingId: hearing.id, responses: normalizedResponses.length, materials: materials.length };
+        return {
+            success: true,
+            hearingId: hearing.id,
+            responses: normalizedResponses.length,
+            materials: materials.length,
+            totalPages: derivedTotalPages || undefined
+        };
     } catch (e) {
         return { success: false, error: e && e.message };
     }

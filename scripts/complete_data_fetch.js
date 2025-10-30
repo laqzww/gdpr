@@ -220,17 +220,17 @@ async function fetchHearingDetails(hearingId, status) {
         if (responses.length > 0) {
             const tx = db.transaction(() => {
                 // Clear existing
-                db.prepare('DELETE FROM responses WHERE hearing_id = ?').run(hearingId);
-                db.prepare('DELETE FROM attachments WHERE hearing_id = ?').run(hearingId);
+                db.prepare('DELETE FROM raw_responses WHERE hearing_id = ?').run(hearingId);
+                db.prepare('DELETE FROM raw_attachments WHERE hearing_id = ?').run(hearingId);
                 
                 // Insert new
                 const respStmt = db.prepare(`
-                    INSERT INTO responses(hearing_id, response_id, text, author, organization, on_behalf_of, submitted_at)
+                    INSERT INTO raw_responses(hearing_id, response_id, text, author, organization, on_behalf_of, submitted_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                 `);
                 
                 const attStmt = db.prepare(`
-                    INSERT INTO attachments(hearing_id, response_id, idx, filename, url)
+                    INSERT INTO raw_attachments(hearing_id, response_id, idx, filename, url)
                     VALUES (?, ?, ?, ?, ?)
                 `);
                 
@@ -258,10 +258,10 @@ async function fetchHearingDetails(hearingId, status) {
         
         if (materials.length > 0) {
             const tx = db.transaction(() => {
-                db.prepare('DELETE FROM materials WHERE hearing_id = ?').run(hearingId);
+                db.prepare('DELETE FROM raw_materials WHERE hearing_id = ?').run(hearingId);
                 
                 const matStmt = db.prepare(`
-                    INSERT INTO materials(hearing_id, idx, type, title, url, content)
+                    INSERT INTO raw_materials(hearing_id, idx, type, title, url, content)
                     VALUES (?, ?, ?, ?, ?, ?)
                 `);
                 
