@@ -1327,7 +1327,14 @@ async function init() {
             </div>
         `;
     }
-    setupSettingsModal();
+    
+    // Setup settings modal - ensure DOM is ready
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', setupSettingsModal);
+    } else {
+        setupSettingsModal();
+    }
+    
     setupEventListeners();
 }
 
@@ -1338,34 +1345,55 @@ function setupSettingsModal() {
     const hearingSearchInput = document.getElementById('hearing-search-input');
     
     if (!settingsBtn || !settingsModalBackdrop) {
-        console.warn('Settings modal elements not found');
+        console.warn('Settings modal elements not found', { settingsBtn: !!settingsBtn, settingsModalBackdrop: !!settingsModalBackdrop });
         return;
     }
     
-    function openSettingsModal() {
-        settingsModalBackdrop.classList.add('show');
-        if (hearingSearchInput) {
-            setTimeout(() => hearingSearchInput.focus(), 100);
+    function openSettingsModal(e) {
+        if (e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+        const backdrop = document.getElementById('settings-modal-backdrop');
+        if (backdrop) {
+            backdrop.classList.add('show');
+            const input = document.getElementById('hearing-search-input');
+            if (input) {
+                setTimeout(() => input.focus(), 100);
+            }
         }
     }
     
     function closeSettingsModal() {
-        settingsModalBackdrop.classList.remove('show');
-        if (hearingSearchInput) {
-            hearingSearchInput.value = '';
+        const backdrop = document.getElementById('settings-modal-backdrop');
+        if (backdrop) {
+            backdrop.classList.remove('show');
+        }
+        const input = document.getElementById('hearing-search-input');
+        if (input) {
+            input.value = '';
             hideSuggestions();
         }
     }
     
-    settingsBtn.addEventListener('click', openSettingsModal);
+    // Remove existing listeners by cloning
+    const newSettingsBtn = settingsBtn.cloneNode(true);
+    settingsBtn.parentNode.replaceChild(newSettingsBtn, settingsBtn);
+    
+    // Add click listener to the new button
+    newSettingsBtn.addEventListener('click', openSettingsModal);
+    
     if (settingsModalClose) {
         settingsModalClose.addEventListener('click', closeSettingsModal);
     }
-    settingsModalBackdrop.addEventListener('click', (e) => {
-        if (e.target === settingsModalBackdrop) {
-            closeSettingsModal();
-        }
-    });
+    
+    if (settingsModalBackdrop) {
+        settingsModalBackdrop.addEventListener('click', (e) => {
+            if (e.target === settingsModalBackdrop) {
+                closeSettingsModal();
+            }
+        });
+    }
     
     // Setup search functionality
     if (hearingSearchInput) {
