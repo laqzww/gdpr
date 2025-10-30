@@ -550,6 +550,63 @@ function renderFooter(detail) {
     }
 }
 
+function renderHearingDetail() {
+    if (!state.detail) return;
+    const detail = state.detail;
+    const doc = document.createDocumentFragment();
+    const container = document.createElement('div');
+    container.innerHTML = renderStateSection(detail);
+    doc.appendChild(container.firstElementChild);
+    // Only show prepared responses - no raw responses section
+    const responsesSection = renderRawResponses(detail);
+    doc.appendChild(responsesSection);
+    doc.appendChild(renderMaterials(detail));
+    detailEl.innerHTML = '';
+    detailEl.appendChild(doc);
+    
+    // Add event listeners for publish button
+    const publishBtnTop = detailEl.querySelector('#publish-btn-top');
+    if (publishBtnTop) {
+        publishBtnTop.addEventListener('click', handlePublish);
+    }
+    
+    // Actions menu toggle
+    const actionsBtn = detailEl.querySelector('#hearing-actions-btn');
+    const actionsMenu = detailEl.querySelector('#hearing-actions-menu');
+    if (actionsBtn && actionsMenu) {
+        actionsBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const isVisible = actionsMenu.style.display !== 'none';
+            actionsMenu.style.display = isVisible ? 'none' : 'block';
+        });
+        
+        // Close menu when clicking outside
+        document.addEventListener('click', (e) => {
+            if (!actionsMenu.contains(e.target) && e.target !== actionsBtn) {
+                actionsMenu.style.display = 'none';
+            }
+        });
+        
+        // Handle menu item clicks
+        actionsMenu.querySelectorAll('.menu-item').forEach(item => {
+            item.addEventListener('click', async () => {
+                actionsMenu.style.display = 'none';
+                const action = item.dataset.action;
+                if (action === 'refresh-raw') {
+                    await handleRefreshRaw();
+                } else if (action === 'reset-hearing') {
+                    await handleResetHearing();
+                } else if (action === 'delete-hearing') {
+                    await handleDeleteHearing();
+                }
+            });
+        });
+    }
+    
+    // Render footer separately (appended to body)
+    renderFooter(detail);
+}
+
 async function handleSavePrepared(preparedId) {
     if (!state.detail || !state.currentId) return;
     const card = detailEl.querySelector(`.prepared-response[data-prepared-id="${preparedId}"]`);
@@ -759,6 +816,35 @@ async function handleResetHearing() {
         showSuccess('Høringen er nulstillet. De originale høringssvar og materiale er hentet igen fra blivhørt.');
     } catch (error) {
         showError(`Kunne ikke nulstille høringen: ${error.message}`);
+    }
+}
+
+async function handleRefreshRaw() {
+    if (!state.currentId) return;
+    try {
+        await fetchJson(`/api/gdpr/hearing/${state.currentId}/refresh-raw`, { method: 'POST' });
+        await Promise.all([loadHearings(), loadHearingDetail(state.currentId)]);
+        showSuccess('Høringssvar er opdateret fra blivhørt. Godkendte svar er bevaret.');
+    } catch (error) {
+        showError(`Kunne ikke opdatere høringssvar: ${error.message}`);
+    }
+}
+
+async function handleDeleteHearing() {
+    if (!state.currentId) return;
+    const confirmDelete = confirm('Dette sletter alle data for denne høring (rå svar, klargjorte svar og materiale). Vil du fortsætte?');
+    if (!confirmDelete) return;
+    try {
+        await fetchJson(`/api/gdpr/hearing/${state.currentId}`, { method: 'DELETE' });
+        state.currentId = null;
+        state.detail = null;
+        await loadHearings();
+        detailEl.innerHTML = '';
+        const footerEl = document.getElementById('publish-footer');
+        if (footerEl) footerEl.remove();
+        showSuccess('Høringen er slettet.');
+    } catch (error) {
+        showError(`Kunne ikke slette høringen: ${error.message}`);
     }
 }
 
@@ -1018,9 +1104,31 @@ function setupHearingSearch(input) {
         }, 100);
     });
     
-    input.addEventListener('keydown', (e) => {
+    input.addEventListener('keydown', async (e) => {
         if (e.key === 'Escape') {
             hideSuggestions();
+        } else if (e.key === 'Enter') {
+            e.preventDefault();
+            const query = input.value.trim();
+            if (!query) return;
+            
+            // If it's a number, fetch directly
+            if (/^\d+$/.test(query)) {
+                hideSuggestions();
+                await handleFetchHearingById(query);
+                return;
+            }
+            
+            // Otherwise, select first suggestion if available
+            const firstItem = document.querySelector('#hearing-search-suggestions .suggestion-item');
+            if (firstItem) {
+                const hearingId = Number(firstItem.dataset.id);
+                if (hearingId) {
+                    hideSuggestions();
+                    input.value = '';
+                    await handleFetchHearingById(String(hearingId));
+                }
+            }
         }
     });
 }
@@ -1050,6 +1158,7 @@ async function handleFetchHearingById(hearingIdParam) {
     }
     
     try {
+        // refresh-raw will hydrate the hearing if it doesn't exist and fetch responses
         await fetchJson(`/api/gdpr/hearing/${id}/refresh-raw`, { method: 'POST' });
         await loadHearings();
         await selectHearing(id);
@@ -1066,7 +1175,13 @@ async function handleFetchHearingById(hearingIdParam) {
             showSuccess('Høringssvar er hentet og høringen er tilføjet til listen.');
         }
     } catch (error) {
-        showError(`Kunne ikke hente høringssvar: ${error.message}`);
+        console.error('Error fetching hearing:', error);
+        const errorMsg = error.message || 'Ukendt fejl';
+        if (errorMsg.includes('ikke fundet') || errorMsg.includes('not found') || errorMsg.includes('404')) {
+            showError(`Høring ${id} blev ikke fundet. Kontroller at hørings-ID'et er korrekt og at høringen findes på blivhørt.`);
+        } else {
+            showError(`Kunne ikke hente høringssvar: ${errorMsg}`);
+        }
     } finally {
         if (loadingElement) {
             loadingElement.remove();
