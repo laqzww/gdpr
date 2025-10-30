@@ -16,23 +16,31 @@ En web-applikation, der indsamler høringssvar fra Københavns Kommunes "Bliv H�
 - **Materiale- og svarpersistens** – Ved prefetch gemmes både svar og materialer i den lokale database for hurtige svartider, og periodiske refresh-jobs sikrer, at åbne høringer løbende opdateres.
 - **Filproxy med API-nøgle-support** – `/api/file-proxy` endpointet forsøger flere downloadstier til Bliv Hørts filservere og kan sende både query-parametre og HTTP-headere med en BLIWHOERT API-nøgle eller cookie for at åbne ellers beskyttede dokumenter. En gyldig API-nøgle eliminerer 403-fejl og gør det muligt at hente vedhæftede PDF-, DOCX- eller regneark direkte i brugergrænsefladen.
 
+## GDPR-klargøring af materiale
+
+- **/gdpr arbejdsflade** – En ny administrativ side (`/gdpr`) gør det muligt at klargøre og kvalitetssikre høringssvar og høringsmateriale manuelt. Rå data fra Bliv Hørt gemmes adskilt fra de manuelt godkendte versioner.
+- **Markdown-konvertering via PyMuPDF** – Vedhæftede PDF-filer og uploaded materiale konverteres til Markdown (`scripts/convert_to_md.py`) så sagsbehandlere kan redigere tekst direkte i browseren. Konverteringen sker via PyMuPDF (fitz).
+- **Godkendelsesflow** – Hvert høringssvar, bilag og materiale kan markeres som godkendt. Først når både svar og materialer er godkendt, kan de publiceres til hovedsiden.
+- **Publisering til offentlig visning** – Når man trykker “Publicer” i `/gdpr`, kopieres de godkendte svar og materialer til de publicerede tabeller og bliver vist på forsiden samt til summariseringsendpoints.
+- **Vector store-rebuild** – `/api/gdpr/hearing/:id/vector-store/rebuild` genindlæser de godkendte tekster i en lokal embeddings-baseret vector store (lagres i SQLite) og tidsstemples på `hearing_preparation_state`.
+
 ## AI-funktioner
 
 - **Høringsopsummeringer** – `/api/summarize/:id` opbygger prompts af høringsmaterialer og svar og streamer flere opsummeringsvarianter fra OpenAI-modeller (konfigureret via `OPENAI_API_KEY`, `MODEL_ID`, m.fl.). Hvis nøglen mangler, vendes tydelige fejl tilbage til klienten.
 - **Automatisk respondentklassifikation** – `/api/auto-classify-respondents/:id` bruger en specialiseret prompt til at foreslå respondenttyper og -navne baseret på svarenes metadata og indhold, så sagsbehandlere kan få strukturerede lister hurtigt.
 - **DOCX-generering** – `/api/build-docx` kombinerer AI-output med skabeloner (via `python-docx`/`docx` biblioteker) for at producere downloadbare høringsresuméer eller svaroversigter i Office-format.
+- **Lokal vector store for kontekst** – Godkendte svar, bilag og materiale konverteres til embeddings med OpenAI (`text-embedding-3-small`) og gemmes i SQLite (`vector_chunks`). Summaries får automatisk de vigtigste uddrag via sektionen “[Udvalgte kontekstafsnit]” i prompten.
 
 ## Funktioner
 
-- **Enkel brugergrænseflade**: Indtast kun et hørings-ID for at hente data
-- **Automatisk datahentning**: Henter høringsoplysninger og svar automatisk
-- **Paginering**: Henter automatisk alle sider med høringssvar
-- **Cookie-mur bypass**: Automatisk håndtering af cookie-consent systemer
-- **PDF-konvertering**: Konverterer automatisk PDF-bilag til læsbar tekst
-- **Bilag-håndtering**: Viser og linker til alle uploadede dokumenter
-- **Responsivt design**: Fungerer på både desktop og mobile enheder
-- **Moderne UI**: Pæn og brugervenlig grænseflade
-- **Fejlhåndtering**: Informative fejlmeddelelser og loading states
+- **Public-facing søgning** – Forsiden (`/`) gør det let at søge i høringer, se status og åbne summariseringsværktøjet.
+- **Automatisk datahentning** – Høringssvar og materiale synkroniseres løbende via cron-jobs og caches i SQLite.
+- **Cookie-mur bypass** – Serveren håndterer consent og henter filer/HTML selv ved 403-responser.
+- **GDPR-arbejdsplads** – `/gdpr` giver et fuldt overblik over rå vs. klargjorte data, mulighed for at konvertere bilag og publicere godkendte versioner.
+- **Markdown-konvertering** – Vedhæftede PDF’er/oplæg konverteres til Markdown (PyMuPDF) til videre redigering.
+- **Vectoriseret kontekst** – Godkendt tekst gemmes i en lokal vector store og indgår automatisk i summariseringsprompten.
+- **Streaming-opsummeringer** – SSE-endpoints leverer flere varianter og kan køres i baggrunden.
+- **DOCX-eksport** – AI-output kan eksporteres til Word-format via `python-docx` fallback.
 
 ## Installation
 
@@ -77,15 +85,22 @@ For at hente data fra høring 206:
 ## Teknisk information
 
 ### Dependencies
-- **Express.js**: Web server framework
-- **Axios**: HTTP client til at hente data
-- **Cheerio**: HTML parsing og DOM manipulation
-- **CORS**: Cross-origin resource sharing
-- **pdf-parse**: PDF tekst-ekstraktion og konvertering
-- **Puppeteer**: Browser automation til at omgå cookie-mure
+- **Express** og **Axios** – grundlæggende API og HTTP-klient.
+- **Cheerio** – udtræk af HTML indhold fra Bliv Hørt.
+- **better-sqlite3** – lokal persistens af rå, klargjorte og publicerede data.
+- **OpenAI Node SDK** – summarization, embeddings og automatiske klassifikationer.
+- **PyMuPDF (fitz)** – konvertering af PDF’er til Markdown (via `scripts/convert_to_md.py`).
+- **Multer** – håndtering af filuploads til `/gdpr`-arbejdspladsen.
 
 ### API Endpoints
 - `GET /api/hearing/:id` - Henter høringsdata for et specifikt ID
+- `GET /api/gdpr/hearings` - Overblik over høringer i klargøringsflowet
+- `GET /api/gdpr/hearing/:id` - Detaljeret data: rå, klargjorte og publicerede svar/materiale
+- `POST /api/gdpr/hearing/:id/responses` - Opret/Opdater klargjort svar
+- `POST /api/gdpr/hearing/:id/responses/:preparedId/attachments/:attachmentId/convert` - Konverter vedhæftning til Markdown via PyMuPDF
+- `POST /api/gdpr/hearing/:id/materials/upload` - Upload materiale og få Markdown-udtræk
+- `POST /api/gdpr/hearing/:id/vector-store/rebuild` - Genbyg lokal vector store for en høring
+- `POST /api/gdpr/hearing/:id/publish` - Publicer godkendte data til forsiden og summariseringsflowet
 
 ### Struktur
 ```
@@ -149,6 +164,8 @@ fetcher/
 - `MAX_TOKENS`: Maks. output tokens for `gpt-5` (bruges som `max_output_tokens`)
 - `SUMMARY_PARALLEL`: Kør flere varianter parallelt: `true` | `false` (standard: `true`)
 - `INTERNAL_API_TIMEOUT_MS`: Timeout for interne HTTP-kald under opsummering (ms). Øg ved store høringer (standard: `300000`).
+- `EMBEDDING_MODEL`: Model til embeddings (standard: `text-embedding-3-small`).
+- `VECTOR_CONTEXT_LIMIT`: Maksimalt antal tegn indsat i afsnittet `[Udvalgte kontekstafsnit]` (standard: `6000`).
 
 Eksempel på `.env` i mappen `fetcher/`:
 

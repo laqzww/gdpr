@@ -1,2 +1,2 @@
-# Empty on purpose: Python deps are vendored in ./python_packages for Render
-# Avoids 'pip install --user' failure inside Render's virtualenv
+# Python dependencies for runtime conversion helpers
+PyMuPDF>=1.24.5
