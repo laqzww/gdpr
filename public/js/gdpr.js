@@ -211,33 +211,48 @@ function showLoadingIndicator(steps) {
 }
 
 let refreshProgressInterval = null;
+let lastResponseCount = 0;
 
 function startRefreshProgressTracking(hearingId) {
     if (refreshProgressInterval) clearInterval(refreshProgressInterval);
     
-    let pageCount = 0;
+    lastResponseCount = 0;
     refreshProgressInterval = setInterval(async () => {
         try {
             // Poll for progress - check if hearing has responses
             const data = await fetchJson(`/api/gdpr/hearing/${hearingId}`).catch(() => null);
             if (data && data.raw && Array.isArray(data.raw.responses)) {
-                // Estimate pages based on response count (assuming ~20 per page)
                 const responseCount = data.raw.responses.length;
-                const estimatedPages = Math.max(1, Math.ceil(responseCount / 20));
-                if (estimatedPages > pageCount) {
-                    pageCount = estimatedPages;
+                // Only update if response count changed
+                if (responseCount !== lastResponseCount) {
+                    lastResponseCount = responseCount;
+                    // Calculate current page being processed
+                    // Each page typically has ~20 responses, but we show the page being processed
+                    // If we have responses, we're on at least page 1
+                    // If we have 20+ responses, we're on page 2, etc.
+                    let currentPage = 1;
+                    if (responseCount > 0) {
+                        // Show page based on responses received
+                        // 0-20 responses = page 1, 21-40 = page 2, etc.
+                        currentPage = Math.ceil(responseCount / 20);
+                        // If we're getting responses but haven't reached a full page yet, we're still on page 1
+                        if (responseCount < 20 && responseCount > 0) {
+                            currentPage = 1;
+                        }
+                    }
+                    
                     showLoadingIndicator({
                         steps: ['Henter høringsdata...', 'Henter svar...', 'Indlæser...'],
                         current: 1,
                         total: 3,
-                        progressText: `(side ${pageCount})`
+                        progressText: responseCount > 0 ? `(side ${currentPage})` : ''
                     });
                 }
             }
         } catch (e) {
-            // Ignore errors
+            // Ignore errors - server might be busy processing
         }
-    }, 500);
+    }, 200); // Poll every 200ms for smoother updates
 }
 
 function stopRefreshProgressTracking() {
@@ -245,6 +260,7 @@ function stopRefreshProgressTracking() {
         clearInterval(refreshProgressInterval);
         refreshProgressInterval = null;
     }
+    lastResponseCount = 0;
 }
 
 function hideLoadingIndicator() {
