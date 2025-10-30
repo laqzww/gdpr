@@ -5629,23 +5629,9 @@ app.post('/api/gdpr/hearing/:id/refresh-raw', async (req, res) => {
         // Recalculate progress
         recalcPreparationProgress(hearingId);
         
-        // Automatically rebuild vector store if there are approved responses
-        // This ensures AI summarization has the latest approved content
-        const approvedCount = db.prepare(`SELECT COUNT(*) as c FROM prepared_responses WHERE hearing_id=? AND approved=1`).get(hearingId)?.c || 0;
-        if (approvedCount > 0) {
-            try {
-                // Rebuild vector store in background (don't await)
-                setImmediate(async () => {
-                    try {
-                        await rebuildLocalVectorStore(hearingId);
-                    } catch (err) {
-                        console.warn('[GDPR] auto-rebuild vector store failed:', err.message);
-                    }
-                });
-            } catch (err) {
-                console.warn('[GDPR] failed to queue vector rebuild:', err.message);
-            }
-        }
+        // DON'T automatically rebuild vector store - it requires OpenAI API key
+        // Vector store rebuild should only happen when explicitly requested via /vector-store/rebuild endpoint
+        // This allows refresh-raw to work without OpenAI API key
         
         const bundle = getPreparedBundle(hearingId);
         if (!bundle) return res.status(404).json({ success: false, error: 'Høring ikke fundet' });

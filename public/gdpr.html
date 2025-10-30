@@ -321,7 +321,7 @@
             max-width: 600px;
             width: 90%;
             max-height: 90vh;
-            overflow: hidden;
+            overflow: visible;
             display: flex;
             flex-direction: column;
         }
@@ -339,6 +339,9 @@
         .settings-modal-body {
             padding: var(--space-xl);
             overflow-y: auto;
+            overflow-x: hidden;
+            flex: 1;
+            min-height: 0;
         }
         .settings-group {
             margin-bottom: var(--space-lg);
@@ -588,14 +591,14 @@
                         Søg efter høringer i indexet eller indtast et hørings-ID. Klik på et resultat for at hente høringssvar.
                     </p>
                     <div style="position:relative;">
-                        <div class="hearing-fetch-group" style="display:flex;gap:var(--space-xs);">
+                        <div class="hearing-fetch-group" style="display:flex;gap:var(--space-xs);position:relative;">
                             <svg class="icon" style="position:absolute;left:var(--space-sm);top:50%;transform:translateY(-50%);width:18px;height:18px;color:var(--color-gray-400);pointer-events:none;z-index:1;">
                                 <circle cx="11" cy="11" r="8"></circle>
                                 <path d="m21 21-4.35-4.35"></path>
                             </svg>
                             <input type="text" id="hearing-search-input" placeholder="Søg høring..." style="flex:1;padding:var(--space-xs) var(--space-sm) var(--space-xs) calc(var(--space-sm) + 24px);border:1px solid var(--color-gray-300);border-radius:var(--radius-sm);font-size:var(--font-size-sm);" autocomplete="off">
                         </div>
-                        <div id="hearing-search-suggestions" class="suggestions-dropdown" style="position:absolute;top:calc(100% + var(--space-xs));left:0;right:0;background:var(--color-white);border:1px solid var(--color-gray-300);border-radius:var(--radius-sm);box-shadow:var(--shadow-lg);max-height:400px;overflow-y:auto;z-index:100;display:none;"></div>
+                        <div id="hearing-search-suggestions" class="suggestions-dropdown" style="display:none;"></div>
                     </div>
                 </div>
             </div>

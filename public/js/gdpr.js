@@ -121,6 +121,32 @@ const state = {
     filters: {}
 };
 
+// Load saved hearings from localStorage
+function loadSavedHearings() {
+    try {
+        const saved = localStorage.getItem('gdpr-user-hearings');
+        if (saved) {
+            const parsed = JSON.parse(saved);
+            if (Array.isArray(parsed)) {
+                state.hearings = parsed;
+                return true;
+            }
+        }
+    } catch (e) {
+        console.error('Kunne ikke loade gemte høringer', e);
+    }
+    return false;
+}
+
+// Save hearings to localStorage
+function saveHearingsToStorage() {
+    try {
+        localStorage.setItem('gdpr-user-hearings', JSON.stringify(state.hearings));
+    } catch (e) {
+        console.error('Kunne ikke gemme høringer', e);
+    }
+}
+
 async function fetchJson(url, options = {}) {
     const response = await fetch(url, options);
     const data = await response.json().catch(() => ({}));
@@ -160,17 +186,22 @@ function showLoadingIndicator(steps) {
     const currentStep = steps.current || 0;
     const totalSteps = steps.total || steps.steps?.length || 3;
     const stepTexts = steps.steps || ['Henter høringsdata...', 'Henter svar...', 'Indlæser...'];
+    const progressText = steps.progressText || '';
     
     loadingEl.innerHTML = `
         <div class="loading-content">
             <div class="loading-spinner-pulse"></div>
             <div class="loading-steps">
-                ${stepTexts.map((text, idx) => `
-                    <div class="loading-step ${idx === currentStep ? 'active' : idx < currentStep ? 'completed' : ''}">
-                        <span class="step-indicator">${idx < currentStep ? '✓' : idx + 1}</span>
-                        <span class="step-text">${text}</span>
-                    </div>
-                `).join('')}
+                ${stepTexts.map((text, idx) => {
+                    const isActive = idx === currentStep;
+                    const displayText = isActive && progressText ? `${text} ${progressText}` : text;
+                    return `
+                        <div class="loading-step ${isActive ? 'active' : idx < currentStep ? 'completed' : ''}">
+                            <span class="step-indicator">${idx < currentStep ? '✓' : idx + 1}</span>
+                            <span class="step-text">${displayText}</span>
+                        </div>
+                    `;
+                }).join('')}
             </div>
             <div class="loading-progress">
                 <div class="loading-progress-bar" style="width: ${((currentStep + 1) / totalSteps) * 100}%"></div>
@@ -179,7 +210,45 @@ function showLoadingIndicator(steps) {
     `;
 }
 
+let refreshProgressInterval = null;
+
+function startRefreshProgressTracking(hearingId) {
+    if (refreshProgressInterval) clearInterval(refreshProgressInterval);
+    
+    let pageCount = 0;
+    refreshProgressInterval = setInterval(async () => {
+        try {
+            // Poll for progress - check if hearing has responses
+            const data = await fetchJson(`/api/gdpr/hearing/${hearingId}`).catch(() => null);
+            if (data && data.raw && Array.isArray(data.raw.responses)) {
+                // Estimate pages based on response count (assuming ~20 per page)
+                const responseCount = data.raw.responses.length;
+                const estimatedPages = Math.max(1, Math.ceil(responseCount / 20));
+                if (estimatedPages > pageCount) {
+                    pageCount = estimatedPages;
+                    showLoadingIndicator({
+                        steps: ['Henter høringsdata...', 'Henter svar...', 'Indlæser...'],
+                        current: 1,
+                        total: 3,
+                        progressText: `(side ${pageCount})`
+                    });
+                }
+            }
+        } catch (e) {
+            // Ignore errors
+        }
+    }, 500);
+}
+
+function stopRefreshProgressTracking() {
+    if (refreshProgressInterval) {
+        clearInterval(refreshProgressInterval);
+        refreshProgressInterval = null;
+    }
+}
+
 function hideLoadingIndicator() {
+    stopRefreshProgressTracking();
     const loadingEl = document.getElementById('hearing-loading-indicator');
     if (loadingEl) {
         loadingEl.remove();
@@ -234,6 +303,51 @@ async function loadHearings() {
     }
 }
 
+async function addOrUpdateHearingInList(hearingId) {
+    try {
+        // Fetch hearing detail to get metadata for the list
+        const data = await fetchJson(`/api/gdpr/hearing/${hearingId}`);
+        if (!data || !data.hearing) return;
+        
+        const hearing = data.hearing;
+        const hearingItem = {
+            hearingId: Number(hearing.id || hearingId),
+            id: Number(hearing.id || hearingId),
+            title: hearing.title || `Høring ${hearingId}`,
+            deadline: hearing.deadline || null,
+            status: hearing.status || 'ukendt',
+            preparation: {
+                status: data.state?.status || 'draft',
+                responsesReady: data.state?.responses_ready || false,
+                materialsReady: data.state?.materials_ready || false
+            },
+            counts: {
+                rawResponses: data.raw?.responses?.length || 0,
+                preparedResponses: data.prepared?.responses?.length || 0,
+                publishedResponses: data.published?.responses?.length || 0
+            }
+        };
+        
+        // Find existing hearing in list
+        const existingIndex = state.hearings.findIndex(h => Number(h.hearingId) === Number(hearingId));
+        if (existingIndex >= 0) {
+            // Update existing
+            state.hearings[existingIndex] = hearingItem;
+        } else {
+            // Add new
+            state.hearings.push(hearingItem);
+        }
+        
+        // Save to localStorage
+        saveHearingsToStorage();
+        renderHearingList();
+    } catch (error) {
+        console.error('Kunne ikke opdatere høring i listen', error);
+        // Don't fall back to loading all hearings - just log the error
+        // The hearing detail will still be loaded via selectHearing()
+    }
+}
+
 function renderHearingList() {
     const total = state.hearings.length;
     const term = (state.searchTerm || '').trim().toLowerCase();
@@ -244,10 +358,12 @@ function renderHearingList() {
         return title.includes(term) || idMatch || statusText.includes(term);
     });
     const count = filtered.length;
-    hearingCountEl.textContent = count;
-    hearingCountEl.title = count === total
-        ? `Viser ${total} høringer`
-        : `Viser ${count} af ${total} høringer`;
+    if (hearingCountEl) {
+        hearingCountEl.textContent = count;
+        hearingCountEl.title = count === total
+            ? `Viser ${total} høringer`
+            : `Viser ${count} af ${total} høringer`;
+    }
     if (!count) {
         hearingListEl.innerHTML = state.searchTerm
             ? '<div class="list-empty">Ingen høringer matcher din søgning</div>'
@@ -853,7 +969,7 @@ async function handlePublish() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ onlyApproved: true })
         });
-        await Promise.all([loadHearings(), loadHearingDetail(state.currentId)]);
+        await Promise.all([addOrUpdateHearingInList(state.currentId), loadHearingDetail(state.currentId)]);
         showSuccess('Høringen er publiceret til hovedsiden. Kun godkendte svar og materiale er blevet publiceret.');
     } catch (error) {
         showError(`Kunne ikke publicere: ${error.message}`);
@@ -890,7 +1006,7 @@ async function handleResetHearing() {
     if (!confirmReset) return;
     try {
         await fetchJson(`/api/gdpr/hearing/${state.currentId}/reset`, { method: 'POST' });
-        await Promise.all([loadHearings(), loadHearingDetail(state.currentId)]);
+        await Promise.all([addOrUpdateHearingInList(state.currentId), loadHearingDetail(state.currentId)]);
         showSuccess('Høringen er nulstillet. De originale høringssvar og materiale er hentet igen fra blivhørt.');
     } catch (error) {
         showError(`Kunne ikke nulstille høringen: ${error.message}`);
@@ -901,7 +1017,7 @@ async function handleRefreshRaw() {
     if (!state.currentId) return;
     try {
         await fetchJson(`/api/gdpr/hearing/${state.currentId}/refresh-raw`, { method: 'POST' });
-        await Promise.all([loadHearings(), loadHearingDetail(state.currentId)]);
+        await Promise.all([addOrUpdateHearingInList(state.currentId), loadHearingDetail(state.currentId)]);
         showSuccess('Høringssvar er opdateret fra blivhørt. Godkendte svar er bevaret.');
     } catch (error) {
         showError(`Kunne ikke opdatere høringssvar: ${error.message}`);
@@ -914,9 +1030,13 @@ async function handleDeleteHearing() {
     if (!confirmDelete) return;
     try {
         await fetchJson(`/api/gdpr/hearing/${state.currentId}`, { method: 'DELETE' });
+        const deletedId = state.currentId;
         state.currentId = null;
         state.detail = null;
-        await loadHearings();
+        // Remove from list instead of loading all
+        state.hearings = state.hearings.filter(h => Number(h.hearingId) !== Number(deletedId));
+        saveHearingsToStorage();
+        renderHearingList();
         detailEl.innerHTML = '';
         const footerEl = document.getElementById('publish-footer');
         if (footerEl) footerEl.remove();
@@ -988,7 +1108,12 @@ detailEl.addEventListener('change', async (event) => {
 });
 
 async function init() {
+    // Load saved hearings from localStorage
+    loadSavedHearings();
+    
     // Don't auto-load hearings - user must use settings modal to search and fetch
+    // But render the list to show header count
+    renderHearingList();
     if (state.hearings.length === 0) {
         detailEl.innerHTML = `
             <div class="detail-section">
@@ -1073,20 +1198,73 @@ async function searchLocally(query) {
         await loadSearchIndex();
     }
     
-    if (!cachedSearchIndex) return [];
-    
     const q = query.toLowerCase();
     const isNumeric = /^\d+$/.test(query);
+    const results = [];
+    const seenIds = new Set();
     
-    return cachedSearchIndex
-        .filter(h => {
+    // Search in cached index
+    if (cachedSearchIndex && cachedSearchIndex.length > 0) {
+        const indexResults = cachedSearchIndex.filter(h => {
             if (isNumeric) {
                 return String(h.id).includes(query);
             }
             const title = (h.title || '').toLowerCase();
             return title.includes(q) || String(h.id).includes(query);
-        })
-        .slice(0, 20);
+        });
+        indexResults.forEach(r => {
+            if (!seenIds.has(String(r.id))) {
+                results.push(r);
+                seenIds.add(String(r.id));
+            }
+        });
+    }
+    
+    // Also search in already loaded hearings
+    if (state.hearings && state.hearings.length > 0) {
+        const loadedResults = state.hearings.filter(h => {
+            const hearingId = h.hearingId || h.id;
+            if (isNumeric) {
+                return String(hearingId).includes(query);
+            }
+            const title = (h.title || '').toLowerCase();
+            return title.includes(q) || String(hearingId).includes(query);
+        }).map(h => ({
+            id: h.hearingId || h.id,
+            title: h.title || `Høring ${h.hearingId || h.id}`,
+            deadline: h.deadline || null
+        }));
+        
+        loadedResults.forEach(r => {
+            if (!seenIds.has(String(r.id))) {
+                results.push(r);
+                seenIds.add(String(r.id));
+            }
+        });
+    }
+    
+    // Also search in database via API if numeric query
+    if (isNumeric && query.length >= 1) {
+        try {
+            const dbResults = await fetchJson(`/api/hearing-index?db=1&q=${encodeURIComponent(query)}`).catch(() => null);
+            if (dbResults && Array.isArray(dbResults.hearings)) {
+                dbResults.hearings.forEach(h => {
+                    if (!seenIds.has(String(h.id))) {
+                        results.push({
+                            id: h.id,
+                            title: h.title || `Høring ${h.id}`,
+                            deadline: h.deadline || null
+                        });
+                        seenIds.add(String(h.id));
+                    }
+                });
+            }
+        } catch (e) {
+            // Ignore errors
+        }
+    }
+    
+    return results.slice(0, 20);
 }
 
 function sortSuggestionsForQuery(suggestions, query) {
@@ -1139,6 +1317,22 @@ function displaySuggestions(suggestions) {
             </div>
         `;
     }).join('');
+    
+    // Position dropdown relative to input field
+    if (inputEl) {
+        const rect = inputEl.getBoundingClientRect();
+        suggestionsDiv.style.position = 'fixed';
+        suggestionsDiv.style.top = `${rect.bottom + 4}px`;
+        suggestionsDiv.style.left = `${rect.left}px`;
+        suggestionsDiv.style.width = `${rect.width}px`;
+        suggestionsDiv.style.backgroundColor = 'var(--color-white)';
+        suggestionsDiv.style.border = '1px solid var(--color-gray-300)';
+        suggestionsDiv.style.borderRadius = 'var(--radius-sm)';
+        suggestionsDiv.style.boxShadow = 'var(--shadow-lg)';
+        suggestionsDiv.style.maxHeight = '400px';
+        suggestionsDiv.style.overflowY = 'auto';
+        suggestionsDiv.style.zIndex = '10001';
+    }
     
     suggestionsDiv.style.display = 'block';
 }
@@ -1232,11 +1426,10 @@ async function handleFetchHearingById(hearingIdParam) {
     }
     hideSuggestions();
     
-    // Mark hearing in list immediately
+    // Mark hearing in state but don't render list yet (to avoid showing "Ingen høringer fundet")
     state.currentId = id;
-    renderHearingList();
     
-    // Show loading indicator on main page
+    // Show loading indicator on main page immediately
     showLoadingIndicator({
         steps: ['Henter høringsdata...', 'Henter svar...', 'Indlæser...'],
         current: 0,
@@ -1261,8 +1454,11 @@ async function handleFetchHearingById(hearingIdParam) {
         showLoadingIndicator({
             steps: ['Henter høringsdata...', 'Henter svar...', 'Indlæser...'],
             current: 1,
-            total: 3
+            total: 3,
+            progressText: ''
         });
+        
+        startRefreshProgressTracking(id);
         
         try {
             await fetchJson(`/api/gdpr/hearing/${id}/refresh-raw`, { method: 'POST' });
@@ -1272,18 +1468,22 @@ async function handleFetchHearingById(hearingIdParam) {
             try {
                 await fetchJson(`/api/gdpr/hearing/${id}/reset`, { method: 'POST' });
             } catch (resetError) {
+                stopRefreshProgressTracking();
                 throw new Error(`Kunne ikke hente høring ${id}. Tjek at høringen findes på blivhørt.`);
             }
         }
         
-        // Step 3: Load hearings and select
+        stopRefreshProgressTracking();
+        
+        // Step 3: Add hearing to list and select
         showLoadingIndicator({
             steps: ['Henter høringsdata...', 'Henter svar...', 'Indlæser...'],
             current: 2,
             total: 3
         });
         
-        await loadHearings();
+        // Add or update the single hearing in the list instead of loading all
+        await addOrUpdateHearingInList(id);
         await selectHearing(id);
         
         setTimeout(() => {
@@ -1297,6 +1497,8 @@ async function handleFetchHearingById(hearingIdParam) {
         } else {
             showError(`Kunne ikke hente høringssvar: ${errorMsg}`);
         }
+        // Re-render list in case of error to show current state
+        renderHearingList();
     } finally {
         hideLoadingIndicator();
         if (hearingSearchInput) {
