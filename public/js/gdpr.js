@@ -145,6 +145,47 @@ function setLoading(flag) {
     else detailEl.classList.remove('is-loading');
 }
 
+function showLoadingIndicator(steps) {
+    const loadingId = 'hearing-loading-indicator';
+    let loadingEl = document.getElementById(loadingId);
+    
+    if (!loadingEl) {
+        loadingEl = document.createElement('div');
+        loadingEl.id = loadingId;
+        loadingEl.className = 'step-loading-indicator';
+        detailEl.innerHTML = '';
+        detailEl.appendChild(loadingEl);
+    }
+    
+    const currentStep = steps.current || 0;
+    const totalSteps = steps.total || steps.steps?.length || 3;
+    const stepTexts = steps.steps || ['Henter høringsdata...', 'Henter svar...', 'Indlæser...'];
+    
+    loadingEl.innerHTML = `
+        <div class="loading-content">
+            <div class="loading-spinner-pulse"></div>
+            <div class="loading-steps">
+                ${stepTexts.map((text, idx) => `
+                    <div class="loading-step ${idx === currentStep ? 'active' : idx < currentStep ? 'completed' : ''}">
+                        <span class="step-indicator">${idx < currentStep ? '✓' : idx + 1}</span>
+                        <span class="step-text">${text}</span>
+                    </div>
+                `).join('')}
+            </div>
+            <div class="loading-progress">
+                <div class="loading-progress-bar" style="width: ${((currentStep + 1) / totalSteps) * 100}%"></div>
+            </div>
+        </div>
+    `;
+}
+
+function hideLoadingIndicator() {
+    const loadingEl = document.getElementById('hearing-loading-indicator');
+    if (loadingEl) {
+        loadingEl.remove();
+    }
+}
+
 function parseDate(value) {
     if (!value) return null;
     const date = new Date(value);
@@ -215,10 +256,14 @@ function renderHearingList() {
     }
     hearingListEl.innerHTML = '';
     const fragment = document.createDocumentFragment();
+    let activeItem = null;
     for (const hearing of filtered) {
         const item = document.createElement('div');
         item.className = 'hearing-item';
-        if (Number(state.currentId) === Number(hearing.hearingId)) item.classList.add('active');
+        if (Number(state.currentId) === Number(hearing.hearingId)) {
+            item.classList.add('active');
+            activeItem = item;
+        }
         const statusPill = formatStatusPill(hearing.preparation?.status);
         const rawCount = hearing.counts?.rawResponses ?? 0;
         const preparedCount = hearing.counts?.preparedResponses ?? 0;
@@ -240,6 +285,18 @@ function renderHearingList() {
         fragment.appendChild(item);
     }
     hearingListEl.appendChild(fragment);
+    
+    // Auto-scroll to active hearing if not visible
+    if (activeItem) {
+        const container = hearingListEl;
+        const itemRect = activeItem.getBoundingClientRect();
+        const containerRect = container.getBoundingClientRect();
+        
+        // Check if item is not fully visible
+        if (itemRect.top < containerRect.top || itemRect.bottom > containerRect.bottom) {
+            activeItem.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+    }
 }
 
 async function selectHearing(hearingId) {
@@ -286,7 +343,28 @@ function renderStateSection(detail) {
         approved: (detail.prepared?.materials || []).filter(m => m.approved).length
     };
     return `
-        <div class="detail-section" data-role="state">
+        <div class="detail-section" data-role="state" style="position:relative;">
+            <button id="hearing-actions-btn" class="btn btn-ghost btn-icon" style="position:absolute;top:var(--space-md);right:var(--space-md);z-index:10;" title="Hørings-handlinger">
+                <svg class="icon" style="width:20px;height:20px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="5" r="1"></circle>
+                    <circle cx="12" cy="12" r="1"></circle>
+                    <circle cx="12" cy="19" r="1"></circle>
+                </svg>
+            </button>
+            <div id="hearing-actions-menu" class="actions-menu" style="display:none;">
+                <button class="menu-item" data-action="refresh-raw">
+                    <span>Opdater fra blivhørt</span>
+                    <span class="menu-item-desc">Opdaterer høringssvar fra blivhørt</span>
+                </button>
+                <button class="menu-item" data-action="reset-hearing">
+                    <span>Fuld nulstil</span>
+                    <span class="menu-item-desc">Nulstiller alle klargjorte svar og materiale</span>
+                </button>
+                <button class="menu-item menu-item-danger" data-action="delete-hearing">
+                    <span>Slet høring</span>
+                    <span class="menu-item-desc">Sletter alle data for denne høring</span>
+                </button>
+            </div>
             <h2>${detail.hearing?.title || `Høring ${detail.hearing?.id}`}</h2>
             <div style="display:flex;align-items:center;gap:var(--space-sm);flex-wrap:wrap;">
                 <span class="${status.className}">${status.text}</span>
@@ -1141,39 +1219,76 @@ async function handleFetchHearingById(hearingIdParam) {
     }
     const id = Number(hearingId);
     
-    const loadingHtml = `
-        <div class="loading-indicator" style="width:100%;justify-content:center;margin-top:var(--space-sm);">
-            <div class="loading-spinner"></div>
-            <span>Henter høringssvar...</span>
-        </div>
-    `;
-    
-    let loadingElement = null;
-    const hearingSearchInput = document.getElementById('hearing-search-input');
-    if (hearingSearchInput && hearingSearchInput.parentElement) {
-        loadingElement = document.createElement('div');
-        loadingElement.innerHTML = loadingHtml;
-        hearingSearchInput.parentElement.appendChild(loadingElement.firstElementChild);
-        hearingSearchInput.disabled = true;
+    // Close modal immediately
+    const settingsModalBackdrop = document.getElementById('settings-modal-backdrop');
+    if (settingsModalBackdrop) {
+        settingsModalBackdrop.classList.remove('show');
     }
     
+    const hearingSearchInput = document.getElementById('hearing-search-input');
+    if (hearingSearchInput) {
+        hearingSearchInput.value = '';
+        hearingSearchInput.disabled = true;
+    }
+    hideSuggestions();
+    
+    // Mark hearing in list immediately
+    state.currentId = id;
+    renderHearingList();
+    
+    // Show loading indicator on main page
+    showLoadingIndicator({
+        steps: ['Henter høringsdata...', 'Henter svar...', 'Indlæser...'],
+        current: 0,
+        total: 3
+    });
+    
     try {
-        // refresh-raw will hydrate the hearing if it doesn't exist and fetch responses
-        await fetchJson(`/api/gdpr/hearing/${id}/refresh-raw`, { method: 'POST' });
+        // Step 1: Try to fetch hearing first - if it doesn't exist, this will try to hydrate it
+        let hearingExists = false;
+        try {
+            const bundle = await fetchJson(`/api/gdpr/hearing/${id}`);
+            if (bundle && bundle.hearing) {
+                hearingExists = true;
+            }
+        } catch (getError) {
+            // Hearing doesn't exist yet, we'll hydrate it below
+            console.log('Hearing not found in database, will hydrate...');
+        }
+        
+        // Step 2: Always call refresh-raw to ensure we have the latest data
+        // This will hydrate the hearing if it doesn't exist
+        showLoadingIndicator({
+            steps: ['Henter høringsdata...', 'Henter svar...', 'Indlæser...'],
+            current: 1,
+            total: 3
+        });
+        
+        try {
+            await fetchJson(`/api/gdpr/hearing/${id}/refresh-raw`, { method: 'POST' });
+        } catch (refreshError) {
+            // If refresh-raw fails, try reset which also hydrates
+            console.log('refresh-raw failed, trying reset...');
+            try {
+                await fetchJson(`/api/gdpr/hearing/${id}/reset`, { method: 'POST' });
+            } catch (resetError) {
+                throw new Error(`Kunne ikke hente høring ${id}. Tjek at høringen findes på blivhørt.`);
+            }
+        }
+        
+        // Step 3: Load hearings and select
+        showLoadingIndicator({
+            steps: ['Henter høringsdata...', 'Henter svar...', 'Indlæser...'],
+            current: 2,
+            total: 3
+        });
+        
         await loadHearings();
         await selectHearing(id);
-        if (hearingSearchInput) hearingSearchInput.value = '';
-        hideSuggestions();
         
-        const settingsModalBackdrop = document.getElementById('settings-modal-backdrop');
-        if (settingsModalBackdrop && settingsModalBackdrop.classList.contains('show')) {
-            settingsModalBackdrop.classList.remove('show');
-            setTimeout(() => {
-                showSuccess('Høringssvar er hentet og høringen er tilføjet til listen.');
-            }, 300);
-        } else {
+        setTimeout(() => {
             showSuccess('Høringssvar er hentet og høringen er tilføjet til listen.');
-        }
+        }, 300);
     } catch (error) {
         console.error('Error fetching hearing:', error);
         const errorMsg = error.message || 'Ukendt fejl';
@@ -1183,9 +1298,7 @@ async function handleFetchHearingById(hearingIdParam) {
             showError(`Kunne ikke hente høringssvar: ${errorMsg}`);
         }
     } finally {
-        if (loadingElement) {
-            loadingElement.remove();
-        }
+        hideLoadingIndicator();
         if (hearingSearchInput) {
             hearingSearchInput.disabled = false;
         }
