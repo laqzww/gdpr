@@ -776,39 +776,6 @@
         </div>
     </template>
 
-    <!-- Settings Modal -->
-    <div id="settings-modal-backdrop" class="settings-modal-backdrop">
-        <div class="settings-modal">
-            <div class="settings-modal-header">
-                <h3>Indstillinger</h3>
-                <button class="btn btn-icon btn-ghost" id="settings-modal-close">
-                    <svg class="icon" style="width:20px;height:20px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <line x1="18" y1="6" x2="6" y2="18"></line>
-                        <line x1="6" y1="6" x2="18" y2="18"></line>
-                    </svg>
-                </button>
-            </div>
-            <div class="settings-modal-body">
-                <div class="settings-group">
-                    <label class="settings-label">Søg og hent høringer</label>
-                    <p style="margin:var(--space-xs) 0 var(--space-sm) 0;font-size:var(--font-size-sm);color:var(--color-gray-600);">
-                        Søg efter høringer i indexet eller indtast et hørings-ID. Klik på et resultat for at hente høringssvar.
-                    </p>
-                    <div style="position:relative;">
-                        <div class="hearing-fetch-group" style="display:flex;gap:var(--space-xs);">
-                            <svg class="icon" style="position:absolute;left:var(--space-sm);top:50%;transform:translateY(-50%);width:18px;height:18px;color:var(--color-gray-400);pointer-events:none;z-index:1;">
-                                <circle cx="11" cy="11" r="8"></circle>
-                                <path d="m21 21-4.35-4.35"></path>
-                            </svg>
-                            <input type="text" id="hearing-search-input" placeholder="Søg høring..." style="flex:1;padding:var(--space-xs) var(--space-sm) var(--space-xs) calc(var(--space-sm) + 24px);border:1px solid var(--color-gray-300);border-radius:var(--radius-sm);font-size:var(--font-size-sm);" autocomplete="off">
-                        </div>
-                        <div id="hearing-search-suggestions" class="suggestions-dropdown" style="position:absolute;top:calc(100% + var(--space-xs));left:0;right:0;background:var(--color-white);border:1px solid var(--color-gray-300);border-radius:var(--radius-sm);box-shadow:var(--shadow-lg);max-height:400px;overflow-y:auto;z-index:100;display:none;"></div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-
     <script type="module" src="/js/gdpr.js?v=1"></script>
 </body>
 </html>

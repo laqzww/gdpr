@@ -1109,23 +1109,34 @@ function renderFooter(detail) {
     };
     const totalApproved = counts.approved + materialsCount.approved;
     
-    return `
-        <div class="publish-footer">
-            <div class="publish-footer-content">
-                <div class="publish-footer-info">
-                    <div class="publish-footer-text">
-                        ${totalApproved > 0 ? `${totalApproved} godkendt${totalApproved > 1 ? 'e' : ''} element${totalApproved > 1 ? 'er' : ''} klar til publicering` : 'Ingen godkendte elementer at publicere'}
-                    </div>
-                    <div class="publish-footer-hint">
-                        Kun godkendte svar og materiale vil blive publiceret
-                    </div>
+    let footerEl = document.getElementById('publish-footer');
+    if (!footerEl) {
+        footerEl = document.createElement('div');
+        footerEl.id = 'publish-footer';
+        footerEl.className = 'publish-footer';
+        document.body.appendChild(footerEl);
+    }
+    
+    footerEl.innerHTML = `
+        <div class="publish-footer-content">
+            <div class="publish-footer-info">
+                <div class="publish-footer-text">
+                    ${totalApproved > 0 ? `${totalApproved} godkendt${totalApproved > 1 ? 'e' : ''} element${totalApproved > 1 ? 'er' : ''} klar til publicering` : 'Ingen godkendte elementer at publicere'}
                 </div>
-                <button id="publish-btn" class="btn btn-primary publish-footer-btn" ${totalApproved === 0 ? 'disabled' : ''}>
-                    Publicer alle godkendte
-                </button>
+                <div class="publish-footer-hint">
+                    Kun godkendte svar og materiale vil blive publiceret
+                </div>
             </div>
+            <button id="publish-btn-footer" class="btn btn-primary publish-footer-btn" ${totalApproved === 0 ? 'disabled' : ''}>
+                Publicer alle godkendte
+            </button>
         </div>
     `;
+    
+    const footerBtn = footerEl.querySelector('#publish-btn-footer');
+    if (footerBtn) {
+        footerBtn.addEventListener('click', handlePublish);
+    }
 }
 
 function renderHearingDetail() {
@@ -1144,12 +1155,8 @@ function renderHearingDetail() {
     
     // Add event listeners for both publish buttons
     const publishBtnTop = detailEl.querySelector('#publish-btn-top');
-    const publishBtn = detailEl.querySelector('#publish-btn');
     if (publishBtnTop) {
         publishBtnTop.addEventListener('click', handlePublish);
-    }
-    if (publishBtn) {
-        publishBtn.addEventListener('click', handlePublish);
     }
     
     // Actions menu toggle
