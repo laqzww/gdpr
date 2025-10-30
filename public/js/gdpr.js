@@ -171,88 +171,139 @@ function setLoading(flag) {
     else detailEl.classList.remove('is-loading');
 }
 
-function showLoadingIndicator(steps) {
-    const loadingId = 'hearing-loading-indicator';
-    let loadingEl = document.getElementById(loadingId);
-    
-    if (!loadingEl) {
-        loadingEl = document.createElement('div');
-        loadingEl.id = loadingId;
-        loadingEl.className = 'step-loading-indicator';
-        detailEl.innerHTML = '';
-        detailEl.appendChild(loadingEl);
-    }
-    
-    const currentStep = steps.current || 0;
-    const totalSteps = steps.total || steps.steps?.length || 3;
-    const stepTexts = steps.steps || ['Henter høringsdata...', 'Henter svar...', 'Indlæser...'];
-    const progressText = steps.progressText || '';
-    
-    loadingEl.innerHTML = `
-        <div class="loading-content">
-            <div class="loading-spinner-pulse"></div>
-            <div class="loading-steps">
-                ${stepTexts.map((text, idx) => {
-                    const isActive = idx === currentStep;
-                    const displayText = isActive && progressText ? `${text} ${progressText}` : text;
-                    return `
-                        <div class="loading-step ${isActive ? 'active' : idx < currentStep ? 'completed' : ''}">
-                            <span class="step-indicator">${idx < currentStep ? '✓' : idx + 1}</span>
-                            <span class="step-text">${displayText}</span>
-                        </div>
-                    `;
-                }).join('')}
-            </div>
-            <div class="loading-progress">
-                <div class="loading-progress-bar" style="width: ${((currentStep + 1) / totalSteps) * 100}%"></div>
-            </div>
-        </div>
-    `;
-}
+    refreshProgressInterval = setInterval(() => {
+        const elapsed = Date.now() - refreshStartTime;
+        
+        // Estimate page based on elapsed time
+        // Based on terminal logs: pages fetch in ~0.1-0.2 seconds each
+        // Page 1: ~0s, Page 2: ~0.2s, Page 3: ~0.4s, etc.
+        // But we'll be more conservative and show progress faster
+        let estimatedPage = 1;
+        if (elapsed >= 0) {
+            // More aggressive: show page based on elapsed time
+            // After 0.2s = page 2, after 0.4s = page 3, etc.
+            estimatedPage = Math.max(1, Math.floor(elapsed / 200) + 1);
+            // Cap at reasonable max
+            estimatedPage = Math.min(estimatedPage, 20);
+        }
+        
+        // Update progress text without re-rendering everything
+        const loadingEl = document.getElementById('hearing-loading-indicator');
+        if (loadingEl) {
+            const progressTextEl = loadingEl.querySelector('.progress-text');
+            if (progressTextEl) {
+                progressTextEl.textContent = `(side ${estimatedPage})`;
+            } else {
+                // Fallback to full update if element not found
+                showLoadingIndicator({
+                    steps: ['Henter høringsdata...', 'Henter svar...', 'Indlæser...'],
+                    current: 1,
+                    total: 3,
+                    progressText: `(side ${estimatedPage})`
+                });
+            }
+        }
+        
+        // Also try to get actual response count as backup (less frequently)
+        if (elapsed % 1000 < 500) { // Only check every ~1 second
+            fetchJson(`/api/gdpr/hearing/${hearingId}`).then(data => {
+                if (data && data.raw && Array.isArray(data.raw.responses)) {
+                    const responseCount = data.raw.responses.length;
+                    if (responseCount > 0 && responseCount !== lastResponseCount) {
+                        lastResponseCount = responseCount;
+                        // If we have actual responses, use that instead
+                        const actualPage = Math.ceil(responseCount / 20);
+                        const loadingEl = document.getElementById('hearing-loading-indicator');
+                        if (loadingEl) {
+                            const progressTextEl = loadingEl.querySelector('.progress-text');
+                            if (progressTextEl && actualPage > 0) {
+                                progressTextEl.textContent = `(side ${actualPage})`;
+                            }
+                        }
+                    }
+                }
+            }).catch(() => {
+                // If API call fails, we already showed time-based estimate above
+            });
+        }
+    }, 500); // Update every 500ms instead of 200ms for smoother animation
 
 let refreshProgressInterval = null;
 let lastResponseCount = 0;
+let refreshStartTime = null;
+let estimatedTotalPages = 3; // Default estimate
 
 function startRefreshProgressTracking(hearingId) {
     if (refreshProgressInterval) clearInterval(refreshProgressInterval);
     
     lastResponseCount = 0;
-    refreshProgressInterval = setInterval(async () => {
-        try {
-            // Poll for progress - check if hearing has responses
-            const data = await fetchJson(`/api/gdpr/hearing/${hearingId}`).catch(() => null);
-            if (data && data.raw && Array.isArray(data.raw.responses)) {
-                const responseCount = data.raw.responses.length;
-                // Only update if response count changed
-                if (responseCount !== lastResponseCount) {
-                    lastResponseCount = responseCount;
-                    // Calculate current page being processed
-                    // Each page typically has ~20 responses, but we show the page being processed
-                    // If we have responses, we're on at least page 1
-                    // If we have 20+ responses, we're on page 2, etc.
-                    let currentPage = 1;
-                    if (responseCount > 0) {
-                        // Show page based on responses received
-                        // 0-20 responses = page 1, 21-40 = page 2, etc.
-                        currentPage = Math.ceil(responseCount / 20);
-                        // If we're getting responses but haven't reached a full page yet, we're still on page 1
-                        if (responseCount < 20 && responseCount > 0) {
-                            currentPage = 1;
+    refreshStartTime = Date.now();
+    estimatedTotalPages = 3; // Reset estimate
+    
+    // Start showing progress immediately
+    showLoadingIndicator({
+        steps: ['Henter høringsdata...', 'Henter svar...', 'Indlæser...'],
+        current: 1,
+        total: 3,
+        progressText: '(side 1)'
+    });
+    
+    refreshProgressInterval = setInterval(() => {
+        const elapsed = Date.now() - refreshStartTime;
+        
+        // Estimate page based on elapsed time
+        // Based on terminal logs: pages fetch in ~0.1-0.2 seconds each
+        // Page 1: ~0s, Page 2: ~0.2s, Page 3: ~0.4s, etc.
+        // But we'll be more conservative and show progress faster
+        let estimatedPage = 1;
+        if (elapsed >= 0) {
+            // More aggressive: show page based on elapsed time
+            // After 0.2s = page 2, after 0.4s = page 3, etc.
+            estimatedPage = Math.max(1, Math.floor(elapsed / 200) + 1);
+            // Cap at reasonable max
+            estimatedPage = Math.min(estimatedPage, 20);
+        }
+        
+        // Update progress text without re-rendering everything
+        const loadingEl = document.getElementById('hearing-loading-indicator');
+        if (loadingEl) {
+            const progressTextEl = loadingEl.querySelector('.progress-text');
+            if (progressTextEl) {
+                progressTextEl.textContent = `(side ${estimatedPage})`;
+            } else {
+                // Fallback to full update if element not found
+                showLoadingIndicator({
+                    steps: ['Henter høringsdata...', 'Henter svar...', 'Indlæser...'],
+                    current: 1,
+                    total: 3,
+                    progressText: `(side ${estimatedPage})`
+                });
+            }
+        }
+        
+        // Also try to get actual response count as backup (less frequently)
+        if (elapsed % 1000 < 500) { // Only check every ~1 second
+            fetchJson(`/api/gdpr/hearing/${hearingId}`).then(data => {
+                if (data && data.raw && Array.isArray(data.raw.responses)) {
+                    const responseCount = data.raw.responses.length;
+                    if (responseCount > 0 && responseCount !== lastResponseCount) {
+                        lastResponseCount = responseCount;
+                        // If we have actual responses, use that instead
+                        const actualPage = Math.ceil(responseCount / 20);
+                        const loadingEl = document.getElementById('hearing-loading-indicator');
+                        if (loadingEl) {
+                            const progressTextEl = loadingEl.querySelector('.progress-text');
+                            if (progressTextEl && actualPage > 0) {
+                                progressTextEl.textContent = `(side ${actualPage})`;
+                            }
                         }
                     }
-                    
-                    showLoadingIndicator({
-                        steps: ['Henter høringsdata...', 'Henter svar...', 'Indlæser...'],
-                        current: 1,
-                        total: 3,
-                        progressText: responseCount > 0 ? `(side ${currentPage})` : ''
-                    });
                 }
-            }
-        } catch (e) {
-            // Ignore errors - server might be busy processing
+            }).catch(() => {
+                // If API call fails, we already showed time-based estimate above
+            });
         }
-    }, 200); // Poll every 200ms for smoother updates
+    }, 500); // Update every 500ms instead of 200ms for smoother animation
 }
 
 function stopRefreshProgressTracking() {
@@ -261,6 +312,8 @@ function stopRefreshProgressTracking() {
         refreshProgressInterval = null;
     }
     lastResponseCount = 0;
+    refreshStartTime = null;
+    estimatedTotalPages = 3;
 }
 
 function hideLoadingIndicator() {
@@ -347,8 +400,13 @@ async function addOrUpdateHearingInList(hearingId) {
         // Find existing hearing in list
         const existingIndex = state.hearings.findIndex(h => Number(h.hearingId) === Number(hearingId));
         if (existingIndex >= 0) {
-            // Update existing
+            // Update existing but preserve isLoading if it was set
+            const wasLoading = state.hearings[existingIndex].isLoading === true;
             state.hearings[existingIndex] = hearingItem;
+            // Only remove loading if we have actual data
+            if (hearingItem.counts && hearingItem.counts.rawResponses > 0) {
+                state.hearings[existingIndex].isLoading = false;
+            }
         } else {
             // Add new
             state.hearings.push(hearingItem);
@@ -400,16 +458,20 @@ function renderHearingList() {
         const rawCount = hearing.counts?.rawResponses ?? 0;
         const preparedCount = hearing.counts?.preparedResponses ?? 0;
         const publishedCount = hearing.counts?.publishedResponses ?? 0;
+        const isLoading = hearing.isLoading === true;
         item.innerHTML = `
             <div style="display:flex;flex-direction:column;gap:4px;">
-                <strong>${hearing.title || `Høring ${hearing.hearingId}`}</strong>
+                <div style="display:flex;align-items:center;gap:var(--space-xs);">
+                    <strong>${hearing.title || `Høring ${hearing.hearingId}`}</strong>
+                    ${isLoading ? '<div class="loading-spinner" style="width:14px;height:14px;border-width:2px;"></div>' : ''}
+                </div>
                 <div style="display:flex;flex-direction:column;gap:2px;font-size:var(--font-size-sm);color:var(--color-gray-600);">
                     <span>Deadline: ${formatDeadline(hearing.deadline)}</span>
                 </div>
                 <div class="pill-group">
-                    <span class="${statusPill.className}">${statusPill.text}</span>
-                    ${hearing.preparation?.responsesReady ? '<span class="status-pill ready">Svar klar</span>' : ''}
-                    ${hearing.preparation?.materialsReady ? '<span class="status-pill ready">Materiale klar</span>' : ''}
+                    ${isLoading ? '<span class="status-pill progress">Henter...</span>' : `<span class="${statusPill.className}">${statusPill.text}</span>`}
+                    ${!isLoading && hearing.preparation?.responsesReady ? '<span class="status-pill ready">Svar klar</span>' : ''}
+                    ${!isLoading && hearing.preparation?.materialsReady ? '<span class="status-pill ready">Materiale klar</span>' : ''}
                 </div>
             </div>
         `;
@@ -1020,23 +1082,150 @@ async function handleResetHearing() {
     if (!state.currentId) return;
     const confirmReset = confirm('Dette nulstiller alle klargjorte svar og materiale og henter de originale høringssvar og materiale igen fra blivhørt. Vil du fortsætte?');
     if (!confirmReset) return;
+    
+    // Show loading indicator
+    showLoadingIndicator({
+        steps: ['Nulstiller høring...', 'Henter høringsdata...', 'Henter svar...', 'Indlæser...'],
+        current: 0,
+        total: 4
+    });
+    
+    // Mark hearing as loading
+    const hearingIndex = state.hearings.findIndex(h => Number(h.hearingId) === Number(state.currentId));
+    if (hearingIndex >= 0) {
+        state.hearings[hearingIndex].isLoading = true;
+        renderHearingList();
+    }
+    
     try {
+        showLoadingIndicator({
+            steps: ['Nulstiller høring...', 'Henter høringsdata...', 'Henter svar...', 'Indlæser...'],
+            current: 1,
+            total: 4
+        });
+        
         await fetchJson(`/api/gdpr/hearing/${state.currentId}/reset`, { method: 'POST' });
+        
+        showLoadingIndicator({
+            steps: ['Nulstiller høring...', 'Henter høringsdata...', 'Henter svar...', 'Indlæser...'],
+            current: 2,
+            total: 4,
+            progressText: ''
+        });
+        
+        // Start progress tracking for responses
+        startRefreshProgressTracking(state.currentId);
+        
+        const refreshStartTime = Date.now();
+        
+        // Give it a moment for data to be saved
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        
+        const elapsed = Date.now() - refreshStartTime;
+        if (elapsed < 2000) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+        
+        stopRefreshProgressTracking();
+        
+        showLoadingIndicator({
+            steps: ['Nulstiller høring...', 'Henter høringsdata...', 'Henter svar...', 'Indlæser...'],
+            current: 3,
+            total: 4
+        });
+        
         await Promise.all([addOrUpdateHearingInList(state.currentId), loadHearingDetail(state.currentId)]);
+        
+        // Remove loading state
+        if (hearingIndex >= 0) {
+            state.hearings[hearingIndex].isLoading = false;
+            renderHearingList();
+        }
+        
         showSuccess('Høringen er nulstillet. De originale høringssvar og materiale er hentet igen fra blivhørt.');
     } catch (error) {
+        stopRefreshProgressTracking();
+        
+        // Remove loading state
+        if (hearingIndex >= 0) {
+            state.hearings[hearingIndex].isLoading = false;
+            renderHearingList();
+        }
+        
         showError(`Kunne ikke nulstille høringen: ${error.message}`);
+    } finally {
+        hideLoadingIndicator();
     }
 }
 
 async function handleRefreshRaw() {
     if (!state.currentId) return;
+    
+    // Show loading indicator
+    showLoadingIndicator({
+        steps: ['Henter høringsdata...', 'Henter svar...', 'Indlæser...'],
+        current: 0,
+        total: 3
+    });
+    
+    // Mark hearing as loading
+    const hearingIndex = state.hearings.findIndex(h => Number(h.hearingId) === Number(state.currentId));
+    if (hearingIndex >= 0) {
+        state.hearings[hearingIndex].isLoading = true;
+        renderHearingList();
+    }
+    
     try {
+        showLoadingIndicator({
+            steps: ['Henter høringsdata...', 'Henter svar...', 'Indlæser...'],
+            current: 1,
+            total: 3,
+            progressText: ''
+        });
+        
+        // Start progress tracking
+        startRefreshProgressTracking(state.currentId);
+        
+        const refreshStartTime = Date.now();
+        
         await fetchJson(`/api/gdpr/hearing/${state.currentId}/refresh-raw`, { method: 'POST' });
+        
+        // Keep tracking for a bit after refresh-raw completes, as server may still be saving
+        const elapsed = Date.now() - refreshStartTime;
+        if (elapsed < 2000) {
+            // If it completed very quickly, wait a bit more for data to be saved
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+        
+        stopRefreshProgressTracking();
+        
+        showLoadingIndicator({
+            steps: ['Henter høringsdata...', 'Henter svar...', 'Indlæser...'],
+            current: 2,
+            total: 3
+        });
+        
         await Promise.all([addOrUpdateHearingInList(state.currentId), loadHearingDetail(state.currentId)]);
+        
+        // Remove loading state
+        if (hearingIndex >= 0) {
+            state.hearings[hearingIndex].isLoading = false;
+            renderHearingList();
+        }
+        
         showSuccess('Høringssvar er opdateret fra blivhørt. Godkendte svar er bevaret.');
     } catch (error) {
+        stopRefreshProgressTracking();
+        
+        // Remove loading state
+        if (hearingIndex >= 0) {
+            state.hearings[hearingIndex].isLoading = false;
+            renderHearingList();
+        }
+        
         showError(`Kunne ikke opdatere høringssvar: ${error.message}`);
+    } finally {
+        hideLoadingIndicator();
     }
 }
 
@@ -1442,7 +1631,58 @@ async function handleFetchHearingById(hearingIdParam) {
     }
     hideSuggestions();
     
-    // Mark hearing in state but don't render list yet (to avoid showing "Ingen høringer fundet")
+    // Step 0: Try to find hearing in search index or already loaded hearings to get metadata immediately
+    let indexHearing = null;
+    if (cachedSearchIndex && cachedSearchIndex.length > 0) {
+        indexHearing = cachedSearchIndex.find(h => Number(h.id) === id);
+    }
+    if (!indexHearing && state.hearings.length > 0) {
+        indexHearing = state.hearings.find(h => Number(h.hearingId || h.id) === id);
+    }
+    
+    // If not found in cache, try to fetch from API search index
+    if (!indexHearing) {
+        try {
+            const searchResults = await fetchJson(`/api/hearing-index?db=1&q=${encodeURIComponent(id)}`).catch(() => null);
+            if (searchResults && Array.isArray(searchResults.hearings)) {
+                indexHearing = searchResults.hearings.find(h => Number(h.id) === id);
+            }
+        } catch (e) {
+            // Ignore errors
+        }
+    }
+    
+    // Add hearing to list immediately with index data (or placeholder) so it appears right away
+    const existingIndex = state.hearings.findIndex(h => Number(h.hearingId) === id);
+    if (existingIndex < 0) {
+        const hearingItem = {
+            hearingId: id,
+            id: id,
+            title: indexHearing?.title || `Høring ${id}`,
+            deadline: indexHearing?.deadline || null,
+            status: indexHearing?.status || 'ukendt',
+            preparation: {
+                status: 'loading',
+                responsesReady: false,
+                materialsReady: false
+            },
+            counts: {
+                rawResponses: 0,
+                preparedResponses: 0,
+                publishedResponses: 0
+            },
+            isLoading: true
+        };
+        state.hearings.push(hearingItem);
+        saveHearingsToStorage();
+        renderHearingList();
+    } else {
+        // Mark existing as loading
+        state.hearings[existingIndex].isLoading = true;
+        renderHearingList();
+    }
+    
+    // Mark hearing as current
     state.currentId = id;
     
     // Show loading indicator on main page immediately
@@ -1453,19 +1693,48 @@ async function handleFetchHearingById(hearingIdParam) {
     });
     
     try {
-        // Step 1: Try to fetch hearing first - if it doesn't exist, this will try to hydrate it
+        // Step 1: Try to fetch hearing first - if it exists in DB, use it directly
         let hearingExists = false;
+        let existingBundle = null;
         try {
-            const bundle = await fetchJson(`/api/gdpr/hearing/${id}`);
-            if (bundle && bundle.hearing) {
-                hearingExists = true;
+            existingBundle = await fetchJson(`/api/gdpr/hearing/${id}`);
+            if (existingBundle && existingBundle.hearing) {
+                // Check if we actually have responses - if not, we need to fetch them
+                const hasResponses = existingBundle.raw && Array.isArray(existingBundle.raw.responses) && existingBundle.raw.responses.length > 0;
+                
+                if (hasResponses) {
+                    hearingExists = true;
+                    // If we have existing data with responses, use it directly without refresh-raw
+                    // This handles the case where cronjob has already fetched the responses
+                    console.log('Hearing found in database with responses, using existing data');
+                    
+                    // Update hearing in list with actual data
+                    await addOrUpdateHearingInList(id);
+                    await selectHearing(id);
+                    
+                    // Remove loading state
+                    const hearingIndex = state.hearings.findIndex(h => Number(h.hearingId) === id);
+                    if (hearingIndex >= 0) {
+                        state.hearings[hearingIndex].isLoading = false;
+                        renderHearingList();
+                    }
+                    
+                    setTimeout(() => {
+                        showSuccess('Høring er indlæst fra databasen.');
+                    }, 300);
+                    
+                    return; // Exit early - we already have the data
+                } else {
+                    // Hearing exists but no responses - need to fetch them
+                    console.log('Hearing found in database but no responses, will fetch them');
+                }
             }
         } catch (getError) {
             // Hearing doesn't exist yet, we'll hydrate it below
             console.log('Hearing not found in database, will hydrate...');
         }
         
-        // Step 2: Always call refresh-raw to ensure we have the latest data
+        // Step 2: Hearing doesn't exist in DB, so fetch it fresh
         // This will hydrate the hearing if it doesn't exist
         showLoadingIndicator({
             steps: ['Henter høringsdata...', 'Henter svar...', 'Indlæser...'],
@@ -1476,6 +1745,8 @@ async function handleFetchHearingById(hearingIdParam) {
         
         startRefreshProgressTracking(id);
         
+        const refreshStartTime = Date.now();
+        
         try {
             await fetchJson(`/api/gdpr/hearing/${id}/refresh-raw`, { method: 'POST' });
         } catch (refreshError) {
@@ -1485,8 +1756,21 @@ async function handleFetchHearingById(hearingIdParam) {
                 await fetchJson(`/api/gdpr/hearing/${id}/reset`, { method: 'POST' });
             } catch (resetError) {
                 stopRefreshProgressTracking();
+                // Remove loading state from hearing
+                const hearingIndex = state.hearings.findIndex(h => Number(h.hearingId) === id);
+                if (hearingIndex >= 0) {
+                    state.hearings[hearingIndex].isLoading = false;
+                }
+                renderHearingList();
                 throw new Error(`Kunne ikke hente høring ${id}. Tjek at høringen findes på blivhørt.`);
             }
+        }
+        
+        // Keep tracking for a bit after refresh-raw completes, as server may still be saving
+        const elapsed = Date.now() - refreshStartTime;
+        if (elapsed < 2000) {
+            // If it completed very quickly, wait a bit more for data to be saved
+            await new Promise(resolve => setTimeout(resolve, 1000));
         }
         
         stopRefreshProgressTracking();
@@ -1508,6 +1792,18 @@ async function handleFetchHearingById(hearingIdParam) {
     } catch (error) {
         console.error('Error fetching hearing:', error);
         const errorMsg = error.message || 'Ukendt fejl';
+        
+        // Remove loading state from hearing
+        const hearingIndex = state.hearings.findIndex(h => Number(h.hearingId) === id);
+        if (hearingIndex >= 0) {
+            state.hearings[hearingIndex].isLoading = false;
+            // If it's a new hearing that failed to load, remove it
+            if (!state.hearings[hearingIndex].counts || state.hearings[hearingIndex].counts.rawResponses === 0) {
+                state.hearings.splice(hearingIndex, 1);
+                saveHearingsToStorage();
+            }
+        }
+        
         if (errorMsg.includes('ikke fundet') || errorMsg.includes('not found') || errorMsg.includes('404')) {
             showError(`Høring ${id} blev ikke fundet. Kontroller at hørings-ID'et er korrekt og at høringen findes på blivhørt.`);
         } else {
@@ -1519,6 +1815,12 @@ async function handleFetchHearingById(hearingIdParam) {
         hideLoadingIndicator();
         if (hearingSearchInput) {
             hearingSearchInput.disabled = false;
+        }
+        // Remove loading state
+        const hearingIndex = state.hearings.findIndex(h => Number(h.hearingId) === id);
+        if (hearingIndex >= 0) {
+            state.hearings[hearingIndex].isLoading = false;
+            renderHearingList();
         }
     }
 }

@@ -5579,7 +5579,19 @@ app.post('/api/gdpr/hearing/:id/refresh-raw', async (req, res) => {
     }
     try {
         // Fetch fresh raw data from blivhørt
-        await hydrateHearingDirect(hearingId);
+        const hydrateResult = await hydrateHearingDirect(hearingId);
+        if (!hydrateResult || !hydrateResult.success) {
+            const errorMsg = hydrateResult?.error || 'Ukendt fejl';
+            console.error('[GDPR] hydrateHearingDirect failed:', errorMsg);
+            return res.status(500).json({ success: false, error: `Kunne ikke hente høringssvar: ${errorMsg}` });
+        }
+        
+        // Verify that responses were actually saved
+        const savedCount = db.prepare(`SELECT COUNT(*) as count FROM raw_responses WHERE hearing_id=?`).get(hearingId).count;
+        if (savedCount === 0 && hydrateResult.responses > 0) {
+            console.warn(`[GDPR] hydrateHearingDirect reported ${hydrateResult.responses} responses but none were saved to DB`);
+            // Don't fail - maybe it's still saving, but log it
+        }
         
         // Get existing approved prepared responses to preserve
         const existingApproved = db.prepare(`
@@ -5635,10 +5647,10 @@ app.post('/api/gdpr/hearing/:id/refresh-raw', async (req, res) => {
         
         const bundle = getPreparedBundle(hearingId);
         if (!bundle) return res.status(404).json({ success: false, error: 'Høring ikke fundet' });
-        res.json({ success: true, bundle });
+        res.json({ success: true, bundle, hydrateResult });
     } catch (error) {
         console.error('[GDPR] refresh raw failed:', error);
-        res.status(500).json({ success: false, error: 'Kunne ikke opdatere fra blivhørt' });
+        res.status(500).json({ success: false, error: 'Kunne ikke opdatere fra blivhørt', details: error.message });
     }
 });
 
@@ -5735,7 +5747,12 @@ app.post('/api/gdpr/hearing/:id/reset', async (req, res) => {
     const hearingId = toInt(req.params.id);
     if (!hearingId) return res.status(400).json({ success: false, error: 'Ugyldigt hørings-ID' });
     try {
-        await hydrateHearingDirect(hearingId);
+        const hydrateResult = await hydrateHearingDirect(hearingId);
+        if (!hydrateResult || !hydrateResult.success) {
+            const errorMsg = hydrateResult?.error || 'Ukendt fejl';
+            console.error('[GDPR] hydrateHearingDirect during reset failed:', errorMsg);
+            // Continue anyway - maybe we can still reset the prepared data
+        }
     } catch (error) {
         console.warn('[GDPR] hydrate during reset failed:', error?.message || error);
     }
