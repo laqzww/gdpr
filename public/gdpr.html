@@ -103,6 +103,13 @@
             border-left: 4px solid var(--color-primary);
             padding-left: calc(var(--space-lg) - 4px);
         }
+        .hearing-item[data-loading="true"] {
+            cursor: default;
+            opacity: 0.7;
+        }
+        .hearing-item[data-loading="true"]:hover {
+            background: transparent;
+        }
         section#gdpr-detail {
             background: var(--color-white);
             border-radius: var(--radius-lg);

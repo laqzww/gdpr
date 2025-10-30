@@ -1,7 +1,116 @@
+// Modern notification system - replace alerts with notifications
+function showNotification(message, type = 'info') {
+    // Get or create notifications container
+    let container = document.getElementById('notifications');
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'notifications';
+        container.style.cssText = `
+            position: fixed;
+            top: var(--space-lg);
+            right: var(--space-lg);
+            z-index: 10000;
+            display: flex;
+            flex-direction: column;
+            gap: var(--space-sm);
+            max-width: 400px;
+            pointer-events: none;
+        `;
+        document.body.appendChild(container);
+    }
+    
+    const notification = document.createElement('div');
+    notification.className = `alert alert-${type === 'error' ? 'error' : type === 'success' ? 'success' : 'info'}`;
+    notification.style.cssText = `
+        min-width: 300px;
+        padding: var(--space-md);
+        border-radius: var(--radius-md);
+        box-shadow: var(--shadow-lg);
+        animation: slideIn 0.3s ease-out;
+        cursor: pointer;
+        pointer-events: auto;
+        display: flex;
+        align-items: center;
+        gap: var(--space-sm);
+    `;
+    
+    const icon = type === 'error' ? '⚠️' : type === 'success' ? '✓' : 'ℹ️';
+    notification.innerHTML = `
+        <span style="font-size: 1.2em;">${icon}</span>
+        <span style="flex: 1;">${message}</span>
+        <button style="background: transparent; border: none; cursor: pointer; font-size: 1.2em; padding: 0; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center;" onclick="this.parentElement.remove()">×</button>
+    `;
+    
+    // Click to dismiss
+    notification.addEventListener('click', (e) => {
+        if (e.target.tagName !== 'BUTTON' && !e.target.closest('button')) {
+            notification.style.animation = 'slideOut 0.2s ease-in';
+            setTimeout(() => notification.remove(), 200);
+        }
+    });
+    
+    container.appendChild(notification);
+    
+    // Auto-dismiss after 5 seconds for non-error notifications; errors remain until clicked
+    if (type !== 'error') {
+        setTimeout(() => {
+            if (notification.parentElement) {
+                notification.style.animation = 'slideOut 0.3s ease-in';
+                setTimeout(() => notification.remove(), 300);
+            }
+        }, 5000);
+    }
+}
+
+function showError(message) {
+    showNotification(message, 'error');
+}
+
+function showSuccess(message) {
+    showNotification(message, 'success');
+}
+
+function showInfo(message) {
+    showNotification(message, 'info');
+}
+
+// Add CSS animations if not already present
+if (!document.getElementById('notification-styles')) {
+    const style = document.createElement('style');
+    style.id = 'notification-styles';
+    style.textContent = `
+        @keyframes slideIn {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+        @keyframes slideOut {
+            from {
+                transform: translateX(0);
+                opacity: 1;
+            }
+            to {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+        }
+    `;
+    document.head.appendChild(style);
+}
+
 const hearingListEl = document.getElementById('hearing-list');
 const detailEl = document.getElementById('gdpr-detail');
 const hearingCountEl = document.getElementById('hearing-count');
 const searchInput = document.getElementById('hearing-search');
+
+if (!hearingListEl || !detailEl || !hearingCountEl) {
+    console.error('Kritiske DOM-elementer mangler:', { hearingListEl, detailEl, hearingCountEl });
+}
 
 const templates = {
     rawResponse: document.getElementById('raw-response-template'),
@@ -61,11 +170,17 @@ function parseDate(value) {
 function formatDateDisplay(value) {
     const date = parseDate(value);
     if (!date) return value || 'ukendt';
-    return date.toLocaleDateString('da-DK');
+    return date.toLocaleDateString('da-DK', { day: '2-digit', month: '2-digit', year: 'numeric' });
 }
 
 function formatDeadline(value) {
     return value ? formatDateDisplay(value) : 'ukendt';
+}
+
+function formatDeadlineShort(value) {
+    const date = parseDate(value);
+    if (!date) return 'Ingen frist';
+    return date.toLocaleDateString('da-DK', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
 if (searchInput) {
@@ -81,6 +196,8 @@ if (searchInput) {
             event.target.blur();
         }
     });
+} else {
+    console.warn('searchInput ikke fundet');
 }
 
 // Settings modal
@@ -94,6 +211,7 @@ let currentSearchToken = 0;
 let lastSuggestionsKey = '';
 
 function setupSettingsModal() {
+    // Retry getting elements if not found initially
     settingsBtn = document.getElementById('settings-btn');
     settingsModal = document.getElementById('settings-modal-backdrop');
     settingsCloseBtn = document.getElementById('settings-modal-close');
@@ -102,38 +220,87 @@ function setupSettingsModal() {
 
     console.log('Settings elements:', { settingsBtn, settingsModal, settingsCloseBtn, hearingSearchInput, hearingSearchSuggestions });
 
-    if (settingsBtn && settingsModal) {
-        settingsBtn.addEventListener('click', (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-            console.log('Settings button clicked');
-            settingsModal.classList.add('show');
-            // Clear search results when opening
-            if (hearingSearchSuggestions) {
-                hearingSearchSuggestions.style.display = 'none';
-                hearingSearchSuggestions.innerHTML = '';
+    if (!settingsBtn) {
+        console.error('Settings button not found in DOM');
+        // Retry after a short delay
+        setTimeout(() => {
+            settingsBtn = document.getElementById('settings-btn');
+            if (settingsBtn) {
+                console.log('Settings button found on retry, setting up...');
+                setupSettingsModal();
+            } else {
+                console.error('Settings button still not found after retry');
             }
-            if (hearingSearchInput) {
-                hearingSearchInput.value = '';
-                hearingSearchInput.focus();
-            }
-        });
-    } else {
-        console.warn('Settings button or modal not found:', { settingsBtn, settingsModal });
+        }, 100);
+        return;
     }
+    
+    if (!settingsModal) {
+        console.error('Settings modal backdrop not found in DOM');
+        return;
+    }
+
+    // Remove any existing listeners by cloning and replacing
+    const newBtn = settingsBtn.cloneNode(true);
+    settingsBtn.parentNode?.replaceChild(newBtn, settingsBtn);
+    settingsBtn = newBtn;
+
+    // Use both capture and bubble phase to catch the event
+    settingsBtn.addEventListener('click', function handleSettingsClick(e) {
+        console.log('Settings button clicked - event caught', e);
+        e.preventDefault();
+        e.stopPropagation();
+        e.stopImmediatePropagation();
+        
+        // Double-check modal exists
+        let modal = document.getElementById('settings-modal-backdrop');
+        if (!modal) {
+            console.error('Settings modal not found when opening');
+            return;
+        }
+        
+        console.log('Opening modal, backdrop element:', modal);
+        console.log('Modal classes before:', modal.className);
+        modal.classList.add('show');
+        document.body.style.overflow = 'hidden';
+        
+        console.log('Modal classes after:', modal.className);
+        console.log('Modal computed display:', window.getComputedStyle(modal).display);
+        
+        // Force reflow to ensure CSS is applied
+        void modal.offsetHeight;
+        
+        // Verify modal is visible
+        setTimeout(() => {
+            const display = window.getComputedStyle(modal).display;
+            console.log('Modal display after timeout:', display);
+            if (display === 'none') {
+                console.error('Modal still not visible! Forcing display...');
+                modal.style.display = 'flex';
+            }
+        }, 10);
+        
+        // Clear search results when opening
+        if (hearingSearchSuggestions) {
+            hearingSearchSuggestions.style.display = 'none';
+            hearingSearchSuggestions.innerHTML = '';
+        }
+        if (hearingSearchInput) {
+            hearingSearchInput.value = '';
+            hearingSearchInput.focus();
+        }
+    }, true); // Capture phase
 
     if (settingsCloseBtn && settingsModal) {
         settingsCloseBtn.addEventListener('click', () => {
-            settingsModal.classList.remove('show');
-            hideSuggestions();
+            closeSettingsModal();
         });
     }
 
     if (settingsModal) {
         settingsModal.addEventListener('click', (e) => {
             if (e.target === settingsModal) {
-                settingsModal.classList.remove('show');
-                hideSuggestions();
+                closeSettingsModal();
             }
         });
     }
@@ -174,7 +341,7 @@ function setupSettingsModal() {
                 if (/^\d+$/.test(query)) {
                     hideSuggestions();
                     await handleFetchHearingById(query);
-                    if (settingsModal) settingsModal.classList.remove('show');
+                    closeSettingsModal();
                     return;
                 }
                 
@@ -186,7 +353,7 @@ function setupSettingsModal() {
                         hideSuggestions();
                         hearingSearchInput.value = '';
                         await handleFetchHearingById(String(hearingId));
-                        if (settingsModal) settingsModal.classList.remove('show');
+                        closeSettingsModal();
                     }
                 }
             }
@@ -253,15 +420,23 @@ function hideSuggestions() {
     lastSuggestionsKey = '';
 }
 
+function closeSettingsModal() {
+    if (settingsModal) {
+        settingsModal.classList.remove('show');
+        document.body.style.overflow = '';
+    }
+    hideSuggestions();
+}
+
 function displaySuggestions(suggestions) {
-    if (!hearingSearchSuggestions) return;
+    if (!hearingSearchSuggestions || !hearingSearchInput) return;
     
     if (suggestions.length === 0) {
         hideSuggestions();
         return;
     }
     
-    const currentQuery = hearingSearchInput?.value?.trim() || '';
+    const currentQuery = hearingSearchInput.value.trim() || '';
     const sorted = sortSuggestionsForQuery(suggestions, currentQuery);
     
     // Dedupe UI updates
@@ -273,7 +448,7 @@ function displaySuggestions(suggestions) {
     
     hearingSearchSuggestions.innerHTML = sorted.map(h => {
         const safeTitle = (h.title && String(h.title).trim()) ? h.title : `Høring ${h.id}`;
-        const deadline = h.deadline ? new Date(h.deadline).toLocaleDateString('da-DK', { day: '2-digit', month: 'short', year: 'numeric' }) : 'Ingen frist';
+        const deadline = formatDeadlineShort(h.deadline);
         const status = h.status || 'Ukendt';
         return `
             <div class="suggestion-item" data-hearing-id="${h.id}">
@@ -299,9 +474,9 @@ function displaySuggestions(suggestions) {
             const hearingId = Number(item.dataset.hearingId);
             if (hearingId) {
                 hideSuggestions();
-                hearingSearchInput.value = '';
+                if (hearingSearchInput) hearingSearchInput.value = '';
                 await handleFetchHearingById(String(hearingId));
-                if (settingsModal) settingsModal.classList.remove('show');
+                closeSettingsModal();
             }
         });
     });
@@ -310,7 +485,11 @@ function displaySuggestions(suggestions) {
 async function loadHearings() {
     try {
         const data = await fetchJson('/api/gdpr/hearings');
-        state.hearings = data.hearings || [];
+        // Only show hearings that have been loaded via modal (have raw responses)
+        state.hearings = (data.hearings || []).filter(hearing => {
+            const rawCount = hearing.counts?.rawResponses ?? 0;
+            return rawCount > 0;
+        });
         renderHearingList();
     } catch (error) {
         console.error('Kunne ikke hente hearings', error);
@@ -895,19 +1074,6 @@ function renderMaterials(detail) {
     return wrapper;
 }
 
-function renderPublishedSection(detail) {
-    const wrapper = document.createElement('div');
-    wrapper.className = 'detail-section';
-    wrapper.dataset.section = 'published';
-    const responses = detail.published?.responses || [];
-    const materials = detail.published?.materials || [];
-    wrapper.innerHTML = `
-        <h2>Publiceret</h2>
-        <p>Publicerede svar: ${responses.length}. Publicerede materialer: ${materials.length}.</p>
-    `;
-    return wrapper;
-}
-
 function renderFooter(detail) {
     const counts = {
         raw: detail.raw?.responses?.length || 0,
@@ -1041,7 +1207,7 @@ async function handleSavePrepared(preparedId) {
         approvedCheckbox.checked = true;
         await loadHearingDetail(state.currentId);
     } catch (error) {
-        alert(`Fejl ved gem af svar: ${error.message}`);
+        showError(`Fejl ved gem af svar: ${error.message}`);
     }
 }
 
@@ -1069,7 +1235,7 @@ async function handleSaveAttachment(preparedId, attachmentId) {
         approvedCheckbox.checked = true;
         await loadHearingDetail(state.currentId);
     } catch (error) {
-        alert(`Fejl ved gem af vedhæftning: ${error.message}`);
+        showError(`Fejl ved gem af vedhæftning: ${error.message}`);
     }
 }
 
@@ -1082,7 +1248,7 @@ async function handleConvertAttachment(preparedId, attachmentId, sourceIdx) {
         });
         await loadHearingDetail(state.currentId);
     } catch (error) {
-        alert(`Konvertering mislykkedes: ${error.message}`);
+        showError(`Konvertering mislykkedes: ${error.message}`);
     }
 }
 
@@ -1114,7 +1280,7 @@ async function handleSaveMaterial(materialId) {
         approvedCheckbox.checked = true;
         await loadHearingDetail(state.currentId);
     } catch (error) {
-        alert(`Fejl ved gem af materiale: ${error.message}`);
+        showError(`Fejl ved gem af materiale: ${error.message}`);
     }
 }
 
@@ -1124,7 +1290,7 @@ async function handleDeleteMaterial(materialId) {
         await fetchJson(`/api/gdpr/hearing/${state.currentId}/materials/${materialId}`, { method: 'DELETE' });
         await loadHearingDetail(state.currentId);
     } catch (error) {
-        alert(`Kunne ikke slette materiale: ${error.message}`);
+        showError(`Kunne ikke slette materiale: ${error.message}`);
     }
 }
 
@@ -1154,7 +1320,7 @@ async function handleUploadMaterial(file) {
         });
         await loadHearingDetail(state.currentId);
     } catch (error) {
-        alert(`Filupload mislykkedes: ${error.message}`);
+        showError(`Filupload mislykkedes: ${error.message}`);
     }
 }
 
@@ -1170,9 +1336,9 @@ async function handlePublish() {
             body: JSON.stringify({ onlyApproved: true })
         });
         await Promise.all([loadHearings(), loadHearingDetail(state.currentId)]);
-        alert('Høringen er publiceret til hovedsiden. Kun godkendte svar og materiale er blevet publiceret.');
+        showSuccess('Høringen er publiceret til hovedsiden. Kun godkendte svar og materiale er blevet publiceret.');
     } catch (error) {
-        alert(`Kunne ikke publicere: ${error.message}`);
+        showError(`Kunne ikke publicere: ${error.message}`);
     }
 }
 
@@ -1184,7 +1350,7 @@ async function handleResetPrepared(preparedId) {
         await fetchJson(`/api/gdpr/hearing/${state.currentId}/responses/${preparedId}/reset`, { method: 'POST' });
         await loadHearingDetail(state.currentId);
     } catch (error) {
-        alert(`Kunne ikke nulstille svaret: ${error.message}`);
+        showError(`Kunne ikke nulstille svaret: ${error.message}`);
     }
 }
 
@@ -1193,9 +1359,9 @@ async function handleRefreshRaw() {
     try {
         await fetchJson(`/api/gdpr/hearing/${state.currentId}/refresh-raw`, { method: 'POST' });
         await Promise.all([loadHearings(), loadHearingDetail(state.currentId)]);
-        alert('Høringssvar er opdateret fra blivhørt. Nye svar er tilføjet, eksisterende godkendte svar er bevaret, og AI-kontekst er opdateret.');
+        showSuccess('Høringssvar er opdateret fra blivhørt. Nye svar er tilføjet, eksisterende godkendte svar er bevaret, og AI-kontekst er opdateret.');
     } catch (error) {
-        alert(`Kunne ikke opdatere fra blivhørt: ${error.message}`);
+        showError(`Kunne ikke opdatere fra blivhørt: ${error.message}`);
     }
 }
 
@@ -1207,229 +1373,54 @@ async function handleDeleteHearing() {
         await fetchJson(`/api/gdpr/hearing/${state.currentId}`, { method: 'DELETE' });
         state.currentId = null;
         await Promise.all([loadHearings(), loadHearingDetail(null)]);
-        alert('Høringen er blevet slettet.');
+        showSuccess('Høringen er blevet slettet.');
     } catch (error) {
-        alert(`Kunne ikke slette høringen: ${error.message}`);
+        showError(`Kunne ikke slette høringen: ${error.message}`);
     }
-}
-
-if (searchHearingsBtn && hearingSearchInput) {
-    searchHearingsBtn.addEventListener('click', () => {
-        handleSearchHearings();
-    });
-    hearingSearchInput.addEventListener('keydown', (event) => {
-        if (event.key === 'Enter') {
-            handleSearchHearings();
-        }
-    });
-}
-
-async function handleSearchHearings() {
-    const query = hearingSearchInput?.value?.trim();
-    if (!query) {
-        if (hearingSearchResults) {
-            hearingSearchResults.style.display = 'none';
-            hearingSearchResults.innerHTML = '';
-        }
-        return;
-    }
-    
-    try {
-        setLoading(true);
-        // Check if it's a number - if so, fetch directly
-        if (/^\d+$/.test(query)) {
-            await handleFetchHearingById(query);
-            return;
-        }
-        
-        // Otherwise search in index
-        const response = await fetch(`/api/hearing-index?db=1&q=${encodeURIComponent(query)}`, {
-            cache: 'no-store',
-            headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate' }
-        });
-        const data = await response.json().catch(() => ({}));
-        
-        if (!hearingSearchResults) return;
-        
-        if (data.success && Array.isArray(data.hearings) && data.hearings.length > 0) {
-            const resultsHtml = data.hearings.slice(0, 20).map(hearing => {
-                const deadline = hearing.deadline ? new Date(hearing.deadline).toLocaleDateString('da-DK') : 'Ukendt';
-                const status = hearing.status || 'Ukendt';
-                return `
-                    <div class="search-result-item" data-hearing-id="${hearing.id}" style="padding:var(--space-sm) var(--space-md);border-bottom:1px solid var(--color-gray-200);cursor:pointer;transition:background var(--transition-fast);">
-                        <div style="font-weight:600;margin-bottom:var(--space-xs);">${hearing.title || `Høring ${hearing.id}`}</div>
-                        <div style="font-size:var(--font-size-sm);color:var(--color-gray-600);">
-                            <span>ID: ${hearing.id}</span>
-                            <span style="margin:0 var(--space-sm);">•</span>
-                            <span>Deadline: ${deadline}</span>
-                            <span style="margin:0 var(--space-sm);">•</span>
-                            <span>Status: ${status}</span>
-                        </div>
-                    </div>
-                `;
-            }).join('');
-            
-            hearingSearchResults.innerHTML = resultsHtml;
-            hearingSearchResults.style.display = 'block';
-            
-            // Add click listeners to result items
-            hearingSearchResults.querySelectorAll('.search-result-item').forEach(item => {
-                item.addEventListener('click', async () => {
-                    const hearingId = Number(item.dataset.hearingId);
-                    if (hearingId) {
-                        await handleFetchHearingById(String(hearingId));
-                        if (settingsModal) settingsModal.classList.remove('show');
-                    }
-                });
-            });
-        } else {
-            hearingSearchResults.innerHTML = '<div style="padding:var(--space-md);text-align:center;color:var(--color-gray-500);">Ingen høringer fundet</div>';
-            hearingSearchResults.style.display = 'block';
-        }
-    } catch (error) {
-        console.error('Søgning fejlede:', error);
-        if (hearingSearchResults) {
-            hearingSearchResults.innerHTML = `<div style="padding:var(--space-md);text-align:center;color:var(--color-error);">Fejl ved søgning: ${error.message}</div>`;
-            hearingSearchResults.style.display = 'block';
-        }
-    } finally {
-        setLoading(false);
-    }
-}
-
-if (fetchHearingBtn) {
-    fetchHearingBtn.addEventListener('click', () => {
-        handleFetchHearingById();
-    });
-}
-
-if (hearingIdInput) {
-    hearingIdInput.addEventListener('keydown', (event) => {
-        if (event.key === 'Enter') {
-            handleFetchHearingById();
-        }
-    });
-}
-
-if (searchHearingsBtn && hearingSearchInput) {
-    searchHearingsBtn.addEventListener('click', () => {
-        handleSearchHearings();
-    });
-    hearingSearchInput.addEventListener('keydown', (event) => {
-        if (event.key === 'Enter') {
-            handleSearchHearings();
-        }
-    });
-}
-
-async function handleSearchHearings() {
-    const query = hearingSearchInput?.value?.trim();
-    if (!query) {
-        if (hearingSearchResults) {
-            hearingSearchResults.style.display = 'none';
-            hearingSearchResults.innerHTML = '';
-        }
-        return;
-    }
-    
-    try {
-        setLoading(true);
-        // Check if it's a number - if so, fetch directly
-        if (/^\d+$/.test(query)) {
-            await handleFetchHearingById(query);
-            return;
-        }
-        
-        // Otherwise search in index
-        const response = await fetch(`/api/hearing-index?db=1&q=${encodeURIComponent(query)}`, {
-            cache: 'no-store',
-            headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate' }
-        });
-        const data = await response.json().catch(() => ({}));
-        
-        if (!hearingSearchResults) return;
-        
-        if (data.success && Array.isArray(data.hearings) && data.hearings.length > 0) {
-            const resultsHtml = data.hearings.slice(0, 20).map(hearing => {
-                const deadline = hearing.deadline ? new Date(hearing.deadline).toLocaleDateString('da-DK') : 'Ukendt';
-                const status = hearing.status || 'Ukendt';
-                return `
-                    <div class="search-result-item" data-hearing-id="${hearing.id}" style="padding:var(--space-sm) var(--space-md);border-bottom:1px solid var(--color-gray-200);cursor:pointer;transition:background var(--transition-fast);">
-                        <div style="font-weight:600;margin-bottom:var(--space-xs);">${hearing.title || `Høring ${hearing.id}`}</div>
-                        <div style="font-size:var(--font-size-sm);color:var(--color-gray-600);">
-                            <span>ID: ${hearing.id}</span>
-                            <span style="margin:0 var(--space-sm);">•</span>
-                            <span>Deadline: ${deadline}</span>
-                            <span style="margin:0 var(--space-sm);">•</span>
-                            <span>Status: ${status}</span>
-                        </div>
-                    </div>
-                `;
-            }).join('');
-            
-            hearingSearchResults.innerHTML = resultsHtml;
-            hearingSearchResults.style.display = 'block';
-            
-            // Add click listeners to result items
-            hearingSearchResults.querySelectorAll('.search-result-item').forEach(item => {
-                item.addEventListener('click', async () => {
-                    const hearingId = Number(item.dataset.hearingId);
-                    if (hearingId) {
-                        await handleFetchHearingById(String(hearingId));
-                        if (settingsModal) settingsModal.classList.remove('show');
-                    }
-                });
-            });
-        } else {
-            hearingSearchResults.innerHTML = '<div style="padding:var(--space-md);text-align:center;color:var(--color-gray-500);">Ingen høringer fundet</div>';
-            hearingSearchResults.style.display = 'block';
-        }
-    } catch (error) {
-        console.error('Søgning fejlede:', error);
-        if (hearingSearchResults) {
-            hearingSearchResults.innerHTML = `<div style="padding:var(--space-md);text-align:center;color:var(--color-error);">Fejl ved søgning: ${error.message}</div>`;
-            hearingSearchResults.style.display = 'block';
-        }
-    } finally {
-        setLoading(false);
-    }
-}
-
-if (fetchHearingBtn) {
-    fetchHearingBtn.addEventListener('click', () => {
-        handleFetchHearingById();
-    });
-}
-
-if (hearingIdInput) {
-    hearingIdInput.addEventListener('keydown', (event) => {
-        if (event.key === 'Enter') {
-            handleFetchHearingById();
-        }
-    });
 }
 
 async function handleFetchHearingById(hearingIdParam) {
     const hearingId = hearingIdParam || hearingSearchInput?.value?.trim();
     if (!hearingId || !/^\d+$/.test(hearingId)) {
-        alert('Indtast et gyldigt hørings-ID');
+        showError('Indtast et gyldigt hørings-ID');
         return;
     }
     const id = Number(hearingId);
     
-    // Show loading indicator in the search input area
-    const loadingHtml = `
-        <div class="loading-indicator" style="width:100%;justify-content:center;margin-top:var(--space-sm);">
-            <div class="loading-spinner"></div>
-            <span>Henter høringssvar...</span>
-        </div>
-    `;
+    // Check if hearing already exists in the list
+    const existingHearing = state.hearings.find(h => Number(h.hearingId) === id);
+    if (existingHearing) {
+        await selectHearing(id);
+        if (hearingSearchInput) hearingSearchInput.value = '';
+        hideSuggestions();
+        return;
+    }
     
-    let loadingElement = null;
-    if (hearingSearchInput && hearingSearchInput.parentElement) {
-        loadingElement = document.createElement('div');
-        loadingElement.innerHTML = loadingHtml;
-        hearingSearchInput.parentElement.appendChild(loadingElement.firstElementChild);
+    // Add loading item to the hearing list
+    let loadingItem = null;
+    if (hearingListEl) {
+        loadingItem = document.createElement('div');
+        loadingItem.className = 'hearing-item';
+        loadingItem.dataset.hearingId = id;
+        loadingItem.dataset.loading = 'true';
+        loadingItem.innerHTML = `
+            <div style="display:flex;flex-direction:column;gap:4px;">
+                <strong>Høring ${id}</strong>
+                <div style="display:flex;align-items:center;gap:var(--space-sm);font-size:var(--font-size-sm);color:var(--color-gray-600);">
+                    <div class="loading-spinner"></div>
+                    <span>Henter høringssvar...</span>
+                </div>
+            </div>
+        `;
+        // Insert at the beginning of the list
+        if (hearingListEl.firstChild) {
+            hearingListEl.insertBefore(loadingItem, hearingListEl.firstChild);
+        } else {
+            hearingListEl.appendChild(loadingItem);
+        }
+    }
+    
+    if (hearingSearchInput) {
         hearingSearchInput.disabled = true;
     }
     
@@ -1443,19 +1434,20 @@ async function handleFetchHearingById(hearingIdParam) {
         hideSuggestions();
         
         if (settingsModal) {
-            settingsModal.classList.remove('show');
+            closeSettingsModal();
             setTimeout(() => {
-                alert('Høringssvar er hentet og høringen er tilføjet til listen.');
+                showSuccess('Høringssvar er hentet og høringen er tilføjet til listen.');
             }, 300);
         } else {
-            alert('Høringssvar er hentet og høringen er tilføjet til listen.');
+            showSuccess('Høringssvar er hentet og høringen er tilføjet til listen.');
         }
     } catch (error) {
-        alert(`Kunne ikke hente høringssvar: ${error.message}`);
-    } finally {
-        if (loadingElement) {
-            loadingElement.remove();
+        // Remove loading item on error
+        if (loadingItem && loadingItem.parentElement) {
+            loadingItem.remove();
         }
+        showError(`Kunne ikke hente høringssvar: ${error.message}`);
+    } finally {
         if (hearingSearchInput) {
             hearingSearchInput.disabled = false;
         }
@@ -1469,9 +1461,9 @@ async function handleCleanupDuplicates() {
     try {
         const result = await fetchJson(`/api/gdpr/hearing/${state.currentId}/cleanup-duplicates`, { method: 'POST' });
         await Promise.all([loadHearings(), loadHearingDetail(state.currentId)]);
-        alert(`Duplikater er blevet ryddet op. ${result.deletedCount || 0} ekstra svar blev slettet.`);
+        showSuccess(`Duplikater er blevet ryddet op. ${result.deletedCount || 0} ekstra svar blev slettet.`);
     } catch (error) {
-        alert(`Kunne ikke rydde duplikater: ${error.message}`);
+        showError(`Kunne ikke rydde duplikater: ${error.message}`);
     }
 }
 
@@ -1482,9 +1474,9 @@ async function handleClearPublished() {
     try {
         await fetchJson(`/api/gdpr/hearing/${state.currentId}/published`, { method: 'DELETE' });
         await Promise.all([loadHearings(), loadHearingDetail(state.currentId)]);
-        alert('Publicerede svar og materiale er blevet slettet.');
+        showSuccess('Publicerede svar og materiale er blevet slettet.');
     } catch (error) {
-        alert(`Kunne ikke slette publicerede data: ${error.message}`);
+        showError(`Kunne ikke slette publicerede data: ${error.message}`);
     }
 }
 
@@ -1495,96 +1487,129 @@ async function handleResetHearing() {
     try {
         await fetchJson(`/api/gdpr/hearing/${state.currentId}/reset`, { method: 'POST' });
         await Promise.all([loadHearings(), loadHearingDetail(state.currentId)]);
-        alert('Høringen er nulstillet. De originale høringssvar og materiale er hentet igen fra blivhørt.');
+        showSuccess('Høringen er nulstillet. De originale høringssvar og materiale er hentet igen fra blivhørt.');
     } catch (error) {
-        alert(`Kunne ikke nulstille høringen: ${error.message}`);
+        showError(`Kunne ikke nulstille høringen: ${error.message}`);
     }
 }
 
-hearingListEl.addEventListener('click', (event) => {
-    const item = event.target.closest('.hearing-item');
-    if (!item) return;
-    const id = Number(item.dataset.hearingId);
-    if (id) selectHearing(id);
-});
+// All event listeners must be set up after DOM is ready
+function setupEventListeners() {
+    if (!detailEl) {
+        console.error('detailEl ikke fundet ved setupEventListeners');
+        return;
+    }
+    
+    detailEl.addEventListener('click', async (event) => {
+        const button = event.target.closest('button');
+        if (!button) return;
+        const action = button.dataset.action;
+        if (action === 'save') {
+            const preparedId = Number(button.dataset.preparedId);
+            if (preparedId) await handleSavePrepared(preparedId);
+        }
+        if (action === 'reset-prepared') {
+            const preparedId = Number(button.dataset.preparedId);
+            if (preparedId) await handleResetPrepared(preparedId);
+        }
+        if (action === 'save-attachment') {
+            const preparedId = Number(button.dataset.preparedId);
+            const attachmentId = Number(button.dataset.attachmentId);
+            if (preparedId && attachmentId) await handleSaveAttachment(preparedId, attachmentId);
+        }
+        if (action === 'convert') {
+            const preparedId = Number(button.dataset.preparedId);
+            const attachmentId = Number(button.dataset.attachmentId);
+            const sourceIdx = button.dataset.sourceIdx !== undefined ? Number(button.dataset.sourceIdx) : null;
+            if (preparedId && attachmentId) await handleConvertAttachment(preparedId, attachmentId, sourceIdx);
+        }
+        if (action === 'save-material') {
+            const materialId = Number(button.dataset.materialId);
+            if (materialId) await handleSaveMaterial(materialId);
+        }
+        if (action === 'delete-material') {
+            const materialId = Number(button.dataset.materialId);
+            if (materialId) await handleDeleteMaterial(materialId);
+        }
+        if (action === 'reset-hearing') {
+            await handleResetHearing();
+        }
+        if (action === 'refresh-raw') {
+            await handleRefreshRaw();
+        }
+        if (action === 'clear-published') {
+            await handleClearPublished();
+        }
+        if (action === 'delete-hearing') {
+            await handleDeleteHearing();
+        }
+        if (action === 'cleanup-duplicates') {
+            await handleCleanupDuplicates();
+        }
+        if (button.id === 'publish-btn' || button.id === 'publish-btn-top') {
+            await handlePublish();
+        }
+        if (action === 'refresh-materials') {
+            await loadHearingDetail(state.currentId);
+        }
+    });
 
-detailEl.addEventListener('click', async (event) => {
-    const button = event.target.closest('button');
-    if (!button) return;
-    const action = button.dataset.action;
-    if (action === 'save') {
-        const preparedId = Number(button.dataset.preparedId);
-        if (preparedId) await handleSavePrepared(preparedId);
-    }
-    if (action === 'reset-prepared') {
-        const preparedId = Number(button.dataset.preparedId);
-        if (preparedId) await handleResetPrepared(preparedId);
-    }
-    if (action === 'save-attachment') {
-        const preparedId = Number(button.dataset.preparedId);
-        const attachmentId = Number(button.dataset.attachmentId);
-        if (preparedId && attachmentId) await handleSaveAttachment(preparedId, attachmentId);
-    }
-    if (action === 'convert') {
-        const preparedId = Number(button.dataset.preparedId);
-        const attachmentId = Number(button.dataset.attachmentId);
-        const sourceIdx = button.dataset.sourceIdx !== undefined ? Number(button.dataset.sourceIdx) : null;
-        if (preparedId && attachmentId) await handleConvertAttachment(preparedId, attachmentId, sourceIdx);
-    }
-    if (action === 'save-material') {
-        const materialId = Number(button.dataset.materialId);
-        if (materialId) await handleSaveMaterial(materialId);
-    }
-    if (action === 'delete-material') {
-        const materialId = Number(button.dataset.materialId);
-        if (materialId) await handleDeleteMaterial(materialId);
-    }
-    if (action === 'reset-hearing') {
-        await handleResetHearing();
-    }
-    if (action === 'refresh-raw') {
-        await handleRefreshRaw();
-    }
-    if (action === 'clear-published') {
-        await handleClearPublished();
-    }
-    if (action === 'delete-hearing') {
-        await handleDeleteHearing();
-    }
-    if (action === 'cleanup-duplicates') {
-        await handleCleanupDuplicates();
-    }
-    if (button.id === 'publish-btn' || button.id === 'publish-btn-top') {
-        await handlePublish();
-    }
-    if (action === 'refresh-materials') {
-        await loadHearingDetail(state.currentId);
-    }
-});
+    detailEl.addEventListener('change', async (event) => {
+        const input = event.target;
+        if (input.id === 'material-upload' && input.files?.length) {
+            const file = input.files[0];
+            await handleUploadMaterial(file);
+            input.value = '';
+        }
+    });
+}
 
-detailEl.addEventListener('change', async (event) => {
-    const input = event.target;
-    if (input.id === 'material-upload' && input.files?.length) {
-        const file = input.files[0];
-        await handleUploadMaterial(file);
-        input.value = '';
-    }
-});
+if (hearingListEl) {
+    hearingListEl.addEventListener('click', (event) => {
+        const item = event.target.closest('.hearing-item');
+        if (!item) return;
+        // Don't allow clicking on loading items
+        if (item.dataset.loading === 'true') return;
+        const id = Number(item.dataset.hearingId);
+        if (id) selectHearing(id);
+    });
+} else {
+    console.warn('hearingListEl ikke fundet');
+}
 
 async function init() {
+    if (!hearingListEl) {
+        console.error('hearingListEl ikke fundet');
+        return;
+    }
     // Don't auto-load hearings - user must use settings modal to search and fetch
     hearingListEl.innerHTML = '<div class="list-empty">Brug indstillinger (⚙️) for at søge og hente høringer</div>';
 }
 
-init().catch(error => {
-    console.error('Initialisering fejlede', error);
-});
-
 // Setup settings modal after DOM is ready
+function initializePage() {
+    try {
+        console.log('Initialiserer side...');
+        console.log('DOM elementer:', {
+            settingsBtn: document.getElementById('settings-btn'),
+            settingsModal: document.getElementById('settings-modal-backdrop'),
+            hearingListEl: document.getElementById('hearing-list')
+        });
+        setupSettingsModal();
+        setupEventListeners();
+        init().catch(error => {
+            console.error('Initialisering fejlede', error);
+        });
+    } catch (error) {
+        console.error('Fejl ved initialisering af side:', error);
+    }
+}
+
+// Wait for DOM to be fully ready
 if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', setupSettingsModal);
+    document.addEventListener('DOMContentLoaded', initializePage);
 } else {
-    // DOM already loaded
-    setupSettingsModal();
+    // DOM is already ready
+    initializePage();
 }
 

@@ -268,6 +268,7 @@ h6 { font-size: var(--font-size-base); }
     box-shadow: 0 -4px 12px rgba(90, 83, 75, 0.1);
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
+    margin-bottom: 0;
 }
 
 .publish-footer-content {
@@ -276,7 +277,7 @@ h6 { font-size: var(--font-size-base); }
     align-items: center;
     flex-wrap: wrap;
     gap: var(--space-md);
-    padding: var(--space-lg) var(--space-xl);
+    padding: var(--space-lg) var(--space-xl) 0 var(--space-xl);
     max-width: 100%;
 }
 
@@ -393,6 +394,88 @@ h6 { font-size: var(--font-size-base); }
 
 @keyframes spin {
     to { transform: rotate(360deg); }
+}
+
+/* Loading Indicator */
+.loading-indicator {
+    display: flex;
+    align-items: center;
+    gap: var(--space-sm);
+    color: var(--color-gray-600);
+    font-size: var(--font-size-sm);
+    font-weight: 500;
+}
+
+.loading-spinner {
+    border: 3px solid var(--color-gray-200);
+    border-top: 3px solid var(--color-primary);
+    border-radius: 50%;
+    width: 18px;
+    height: 18px;
+    animation: spin 1s linear infinite;
+}
+
+/* Search Result Items */
+.search-result-item:hover {
+    background: var(--color-gray-50);
+}
+
+.search-result-item:last-child {
+    border-bottom: none;
+}
+
+/* Suggestions Dropdown */
+.suggestions-dropdown {
+    position: absolute;
+    top: calc(100% + var(--space-xs));
+    left: 0;
+    right: 0;
+    background: var(--color-white);
+    border: 1px solid var(--color-gray-300);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-lg);
+    max-height: 400px;
+    overflow-y: auto;
+    z-index: 100;
+}
+
+.suggestion-item {
+    padding: var(--space-sm) var(--space-md);
+    border-bottom: 1px solid var(--color-gray-200);
+    cursor: pointer;
+    transition: background-color var(--transition-fast);
+}
+
+.suggestion-item:hover {
+    background-color: var(--color-gray-50);
+}
+
+.suggestion-item:last-child {
+    border-bottom: none;
+}
+
+.suggestion-content {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-xs);
+}
+
+.suggestion-title {
+    font-weight: 600;
+    color: var(--color-dark);
+    font-size: var(--font-size-sm);
+}
+
+.suggestion-meta {
+    display: flex;
+    align-items: center;
+    gap: var(--space-xs);
+    font-size: var(--font-size-xs);
+    color: var(--color-gray-600);
+}
+
+.suggestion-meta span {
+    display: inline-block;
 }
 
 /* Utilities */
