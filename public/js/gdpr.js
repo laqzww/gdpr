@@ -1,3 +1,105 @@
+// Modern notification system - replace alerts with notifications
+function showNotification(message, type = 'info') {
+    let container = document.getElementById('notifications');
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'notifications';
+        container.style.cssText = `
+            position: fixed;
+            top: var(--space-lg);
+            right: var(--space-lg);
+            z-index: 10000;
+            display: flex;
+            flex-direction: column;
+            gap: var(--space-sm);
+            max-width: 400px;
+            pointer-events: none;
+        `;
+        document.body.appendChild(container);
+    }
+    
+    const notification = document.createElement('div');
+    notification.className = `alert alert-${type === 'error' ? 'error' : type === 'success' ? 'success' : 'info'}`;
+    notification.style.cssText = `
+        min-width: 300px;
+        padding: var(--space-md);
+        border-radius: var(--radius-md);
+        box-shadow: var(--shadow-lg);
+        animation: slideIn 0.3s ease-out;
+        cursor: pointer;
+        pointer-events: auto;
+        display: flex;
+        align-items: center;
+        gap: var(--space-sm);
+    `;
+    
+    const icon = type === 'error' ? '⚠️' : type === 'success' ? '✓' : 'ℹ️';
+    notification.innerHTML = `
+        <span style="font-size: 1.2em;">${icon}</span>
+        <span style="flex: 1;">${message}</span>
+        <button style="background: transparent; border: none; cursor: pointer; font-size: 1.2em; padding: 0; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center;" onclick="this.parentElement.remove()">×</button>
+    `;
+    
+    notification.addEventListener('click', (e) => {
+        if (e.target.tagName !== 'BUTTON' && !e.target.closest('button')) {
+            notification.style.animation = 'slideOut 0.2s ease-in';
+            setTimeout(() => notification.remove(), 200);
+        }
+    });
+    
+    container.appendChild(notification);
+    
+    if (type !== 'error') {
+        setTimeout(() => {
+            if (notification.parentElement) {
+                notification.style.animation = 'slideOut 0.3s ease-in';
+                setTimeout(() => notification.remove(), 300);
+            }
+        }, 5000);
+    }
+}
+
+function showError(message) {
+    showNotification(message, 'error');
+}
+
+function showSuccess(message) {
+    showNotification(message, 'success');
+}
+
+function showInfo(message) {
+    showNotification(message, 'info');
+}
+
+// Add CSS animations if not already present
+if (!document.getElementById('notification-styles')) {
+    const style = document.createElement('style');
+    style.id = 'notification-styles';
+    style.textContent = `
+        @keyframes slideIn {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+        @keyframes slideOut {
+            from {
+                transform: translateX(0);
+                opacity: 1;
+            }
+            to {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+        }
+    `;
+    document.head.appendChild(style);
+}
+
 const hearingListEl = document.getElementById('hearing-list');
 const detailEl = document.getElementById('gdpr-detail');
 const hearingCountEl = document.getElementById('hearing-count');
@@ -15,7 +117,8 @@ const state = {
     currentId: null,
     detail: null,
     loading: false,
-    searchTerm: ''
+    searchTerm: '',
+    filters: {}
 };
 
 async function fetchJson(url, options = {}) {
@@ -51,11 +154,17 @@ function parseDate(value) {
 function formatDateDisplay(value) {
     const date = parseDate(value);
     if (!date) return value || 'ukendt';
-    return date.toLocaleDateString('da-DK');
+    return date.toLocaleDateString('da-DK', { day: '2-digit', month: '2-digit', year: 'numeric' });
+}
+
+function formatDeadlineShort(value) {
+    const date = parseDate(value);
+    if (!date) return 'Ingen frist';
+    return date.toLocaleDateString('da-DK', { day: '2-digit', month: 'short', year: 'numeric' });
 }
 
 function formatDeadline(value) {
-    return value ? formatDateDisplay(value) : 'ukendt';
+    return value ? formatDeadlineShort(value) : 'ukendt';
 }
 
 if (searchInput) {
@@ -119,9 +228,6 @@ function renderHearingList() {
                 <strong>${hearing.title || `Høring ${hearing.hearingId}`}</strong>
                 <div style="display:flex;flex-direction:column;gap:2px;font-size:var(--font-size-sm);color:var(--color-gray-600);">
                     <span>Deadline: ${formatDeadline(hearing.deadline)}</span>
-                    <span title="Rå svar stammer fra blivhørt. Klargjorte svar er dine redigerede kopier. Publicerede svar er sendt til forsiden.">
-                        Svar (rå/klarg./publ.): ${rawCount} / ${preparedCount} / ${publishedCount}
-                    </span>
                 </div>
                 <div class="pill-group">
                     <span class="${statusPill.className}">${statusPill.text}</span>
@@ -170,38 +276,30 @@ function renderStateSection(detail) {
     const counts = {
         raw: detail.raw?.responses?.length || 0,
         prepared: detail.prepared?.responses?.length || 0,
-        published: detail.published?.responses?.length || 0
+        published: detail.published?.responses?.length || 0,
+        approved: (detail.prepared?.responses || []).filter(r => r.approved).length
     };
     const materialsCount = {
         raw: detail.raw?.materials?.length || 0,
         prepared: detail.prepared?.materials?.length || 0,
-        published: detail.published?.materials?.length || 0
+        published: detail.published?.materials?.length || 0,
+        approved: (detail.prepared?.materials || []).filter(m => m.approved).length
     };
     return `
         <div class="detail-section" data-role="state">
             <h2>${detail.hearing?.title || `Høring ${detail.hearing?.id}`}</h2>
             <div style="display:flex;align-items:center;gap:var(--space-sm);flex-wrap:wrap;">
                 <span class="${status.className}">${status.text}</span>
-                <span class="status-pill ${responsesReady ? 'ready' : 'progress'}" title="Klargjorte svar er dine redigerede kopier. Rå svar bevares som reference.">Svar klargjort: ${counts.prepared}/${counts.raw}</span>
-                <span class="status-pill ${materialsReady ? 'ready' : 'progress'}">Materiale klargjort: ${materialsCount.prepared}/${materialsCount.raw}</span>
+                <span class="status-pill ${counts.approved === counts.raw && counts.raw > 0 ? 'ready' : 'progress'}" title="Godkendte svar er klar til publicering. Rå svar er de originale fra blivhørt.">Svar godkendt: ${counts.approved}/${counts.raw}</span>
+                <span class="status-pill ${materialsCount.approved === materialsCount.raw && materialsCount.raw > 0 ? 'ready' : 'progress'}">Materiale godkendt: ${materialsCount.approved}/${materialsCount.raw}</span>
+                <span class="status-pill ready">Publicerede svar: ${counts.published}/${counts.raw}</span>
+                <span class="status-pill ready">Publicerede materialer: ${materialsCount.published}/${materialsCount.raw}</span>
                 ${publishedAt ? `<span class="status-pill ready">Publiceret ${formatDateDisplay(publishedAt)}</span>` : ''}
             </div>
             <div style="margin-top:var(--space-sm);display:grid;gap:var(--space-xs);font-size:var(--font-size-sm);color:var(--color-gray-600);">
                 <span>Deadline: ${formatDeadline(detail.hearing?.deadline)}</span>
                 <span>Status: ${detail.hearing?.status || 'ukendt'}</span>
             </div>
-        <div class="publish-bar">
-            <div>Publicerede svar: ${counts.published}. Publicerede materialer: ${materialsCount.published}.</div>
-            <div style="display:flex;gap:var(--space-sm);align-items:center;flex-wrap:wrap;">
-                <button class="btn btn-secondary" data-action="reset-hearing" title="Nulstil alle klargjorte data og hent originale høringssvar og materiale igen fra blivhørt">Hent rå data igen</button>
-                <button class="btn btn-secondary" data-action="rebuild-vector" title="Opdater AI-kontekst til summariseringsværktøjer">Opdater AI-kontekst</button>
-                <label style="display:flex;gap:var(--space-xs);align-items:center;font-size:var(--font-size-sm);">
-                    <input type="checkbox" id="publish-only-approved" checked>
-                    Kun godkendte
-                </label>
-                <button id="publish-btn">Publicer</button>
-            </div>
-        </div>
         </div>
     `;
 }
@@ -214,7 +312,7 @@ function renderRawResponses(detail) {
     wrapper.innerHTML = `
         <h2>Høringssvar</h2>
         <p style="margin-top:var(--space-xs);color:var(--color-gray-600);font-size:var(--font-size-sm);">
-            Redigér den klargjorte kopi og gem dine ændringer, eller nulstil til den oprindelige version.
+            Redigér den klargjorte kopi og gem dine ændringer. Svar markeres automatisk som klargjort når der gemmes. Eller nulstil til den oprindelige version.
         </p>
     `;
     const list = document.createElement('div');
@@ -223,15 +321,27 @@ function renderRawResponses(detail) {
     const rawResponses = detail.raw?.responses || [];
     const usedPreparedIds = new Set();
 
+    // Calculate svarnummer based on all prepared responses (not filtered)
+    const allPreparedSorted = [...preparedResponses].sort((a, b) => {
+        const aId = Number(a.preparedId);
+        const bId = Number(b.preparedId);
+        return aId - bId;
+    });
+    const svarnummerMap = new Map();
+    allPreparedSorted.forEach((p, idx) => {
+        svarnummerMap.set(Number(p.preparedId), idx + 1);
+    });
+
     // If no prepared responses exist but raw responses do, show message
     if (!preparedResponses.length && rawResponses.length) {
-        list.innerHTML = '<div class="list-empty">Ingen klargjorte svar endnu. Klik på "Hent rå data igen" for at oprette klargjorte svar fra de originale høringssvar.</div>';
+        list.innerHTML = '<div class="list-empty">Ingen klargjorte svar endnu. Klik på "Fuld nulstil" for at oprette klargjorte svar fra de originale høringssvar.</div>';
     } else if (!preparedResponses.length && !rawResponses.length) {
         list.innerHTML = '<div class="list-empty">Ingen svar hentet fra blivhørt endnu.</div>';
     } else {
         // Show all prepared responses (only one per raw response should exist)
         preparedResponses.forEach((prepared) => {
-            const preparedCard = createPreparedResponseCard(prepared);
+            const svarnummer = svarnummerMap.get(Number(prepared.preparedId)) || 0;
+            const preparedCard = createPreparedResponseCard(prepared, svarnummer);
             list.appendChild(preparedCard);
             usedPreparedIds.add(Number(prepared.preparedId));
         });
@@ -248,15 +358,29 @@ function createBadge(text) {
     return span;
 }
 
-function createPreparedResponseCard(prepared) {
+function createPreparedResponseCard(prepared, svarnummer = null) {
     const card = createCardFromTemplate('preparedResponse');
     card.dataset.preparedId = prepared.preparedId;
     const title = card.querySelector('.title-group');
-    title.innerHTML = `<strong>Klargjort svar #${prepared.sourceResponseId ?? prepared.preparedId}</strong>
-        <div class="pill-group">
-            ${prepared.respondentName ? `<span class="badge">${prepared.respondentName}</span>` : ''}
-            ${prepared.organization ? `<span class="badge">${prepared.organization}</span>` : ''}
-            ${prepared.hasAttachments ? '<span class="badge">Vedhæftninger</span>' : ''}
+    const svarnummerText = svarnummer ? `Svarnummer ${svarnummer}` : `Svarnummer ${prepared.preparedId}`;
+    title.innerHTML = `<strong>${svarnummerText}</strong>
+        <div class="pill-group" style="margin-top:var(--space-xs);">
+            <div style="display:flex;gap:var(--space-sm);align-items:center;flex-wrap:wrap;">
+                <label style="display:flex;gap:var(--space-xs);align-items:center;font-size:var(--font-size-sm);">
+                    <span>Navn:</span>
+                    <input type="text" data-role="respondent-name" value="${prepared.respondentName || 'Borger'}" style="padding:var(--space-xs);border:1px solid var(--color-gray-300);border-radius:var(--radius-sm);font-size:var(--font-size-sm);" placeholder="Borger">
+                </label>
+                <label style="display:flex;gap:var(--space-xs);align-items:center;font-size:var(--font-size-sm);">
+                    <span>Type:</span>
+                    <select data-role="respondent-type" style="padding:var(--space-xs);border:1px solid var(--color-gray-300);border-radius:var(--radius-sm);font-size:var(--font-size-sm);">
+                        <option value="Borger" ${(prepared.respondentType || 'Borger') === 'Borger' ? 'selected' : ''}>Borger</option>
+                        <option value="Organisation" ${prepared.respondentType === 'Organisation' ? 'selected' : ''}>Organisation</option>
+                        <option value="Myndighed" ${prepared.respondentType === 'Myndighed' ? 'selected' : ''}>Myndighed</option>
+                        <option value="Politisk parti" ${prepared.respondentType === 'Politisk parti' ? 'selected' : ''}>Politisk parti</option>
+                    </select>
+                </label>
+            </div>
+            ${prepared.hasAttachments ? '<span class="badge" style="margin-top:var(--space-xs);">Vedhæftninger</span>' : ''}
         </div>`;
     const approvedCheckbox = card.querySelector('[data-role="approved"]');
     approvedCheckbox.checked = !!prepared.approved;
@@ -314,8 +438,19 @@ function renderPreparedResponses(detail, skipSet = new Set()) {
     const list = document.createElement('div');
     list.className = 'card-list';
 
+    const allPreparedSorted = [...responses].sort((a, b) => {
+        const aId = Number(a.preparedId);
+        const bId = Number(b.preparedId);
+        return aId - bId;
+    });
+    const svarnummerMap = new Map();
+    allPreparedSorted.forEach((p, idx) => {
+        svarnummerMap.set(Number(p.preparedId), idx + 1);
+    });
+
     responses.forEach((resp) => {
-        const card = createPreparedResponseCard(resp);
+        const svarnummer = svarnummerMap.get(Number(resp.preparedId)) || 0;
+        const card = createPreparedResponseCard(resp, svarnummer);
         list.appendChild(card);
     });
 
@@ -376,20 +511,43 @@ function renderPublishedSection(detail) {
     return wrapper;
 }
 
-function renderHearingDetail() {
-    if (!state.detail) return;
-    const detail = state.detail;
-    const doc = document.createDocumentFragment();
-    const container = document.createElement('div');
-    container.innerHTML = renderStateSection(detail);
-    doc.appendChild(container.firstElementChild);
-    // Only show prepared responses - no raw responses section
-    const responsesSection = renderRawResponses(detail);
-    doc.appendChild(responsesSection);
-    doc.appendChild(renderMaterials(detail));
-    doc.appendChild(renderPublishedSection(detail));
-    detailEl.innerHTML = '';
-    detailEl.appendChild(doc);
+function renderFooter(detail) {
+    const counts = {
+        raw: detail.raw?.responses?.length || 0,
+        approved: (detail.prepared?.responses || []).filter(r => r.approved).length
+    };
+    const materialsCount = {
+        raw: detail.raw?.materials?.length || 0,
+        approved: (detail.prepared?.materials || []).filter(m => m.approved).length
+    };
+    
+    let footerEl = document.getElementById('publish-footer');
+    if (!footerEl) {
+        footerEl = document.createElement('div');
+        footerEl.id = 'publish-footer';
+        footerEl.className = 'publish-footer';
+        document.body.appendChild(footerEl);
+    }
+    
+    const readyCount = counts.approved + materialsCount.approved;
+    footerEl.innerHTML = `
+        <div class="publish-footer-content">
+            <div class="publish-footer-info">
+                <div class="publish-footer-text">
+                    ${readyCount} godkendt${readyCount !== 1 ? 'e' : ''} element${readyCount !== 1 ? 'er' : ''} klar til publicering
+                </div>
+                <div class="publish-footer-hint">
+                    Kun godkendte svar og materiale vil blive publiceret
+                </div>
+            </div>
+            <button id="publish-btn-footer" class="btn btn-primary publish-footer-btn">Publicer alle godkendte</button>
+        </div>
+    `;
+    
+    const footerBtn = footerEl.querySelector('#publish-btn-footer');
+    if (footerBtn) {
+        footerBtn.addEventListener('click', handlePublish);
+    }
 }
 
 async function handleSavePrepared(preparedId) {
@@ -398,17 +556,21 @@ async function handleSavePrepared(preparedId) {
     if (!card) return;
     const textArea = card.querySelector('textarea[data-role="text"]');
     const approvedCheckbox = card.querySelector('[data-role="approved"]');
+    const respondentNameInput = card.querySelector('[data-role="respondent-name"]');
+    const respondentTypeSelect = card.querySelector('[data-role="respondent-type"]');
     const prepared = (state.detail.prepared?.responses || []).find(r => Number(r.preparedId) === Number(preparedId));
     if (!prepared) return;
     try {
+        // Auto-approve when saving
+        const now = Date.now();
         await fetchJson(`/api/gdpr/hearing/${state.currentId}/responses`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 preparedId,
                 sourceResponseId: prepared.sourceResponseId ?? null,
-                respondentName: prepared.respondentName ?? null,
-                respondentType: prepared.respondentType ?? null,
+                respondentName: respondentNameInput ? respondentNameInput.value : (prepared.respondentName ?? 'Borger'),
+                respondentType: respondentTypeSelect ? respondentTypeSelect.value : (prepared.respondentType ?? 'Borger'),
                 author: prepared.author ?? null,
                 organization: prepared.organization ?? null,
                 onBehalfOf: prepared.onBehalfOf ?? null,
@@ -416,13 +578,16 @@ async function handleSavePrepared(preparedId) {
                 textMd: textArea.value,
                 hasAttachments: prepared.hasAttachments,
                 attachmentsReady: prepared.attachmentsReady,
-                approved: approvedCheckbox.checked,
+                approved: true,
+                approvedAt: now,
                 notes: prepared.notes ?? null
             })
         });
+        approvedCheckbox.checked = true;
         await loadHearingDetail(state.currentId);
+        showSuccess('Svar gemt og godkendt.');
     } catch (error) {
-        alert(`Fejl ved gem af svar: ${error.message}`);
+        showError(`Fejl ved gem af svar: ${error.message}`);
     }
 }
 
@@ -433,19 +598,24 @@ async function handleSaveAttachment(preparedId, attachmentId) {
     const textArea = container.querySelector('[data-role="attachment-text"]');
     const approvedCheckbox = container.querySelector('[data-role="attachment-approved"]');
     try {
+        // Auto-approve when saving
+        const now = Date.now();
         await fetchJson(`/api/gdpr/hearing/${state.currentId}/responses/${preparedId}/attachments`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 attachmentId,
                 convertedMd: textArea.value,
-                approved: approvedCheckbox.checked,
+                approved: true,
+                approvedAt: now,
                 conversionStatus: 'manual-edit'
             })
         });
+        approvedCheckbox.checked = true;
         await loadHearingDetail(state.currentId);
+        showSuccess('Vedhæftning gemt og godkendt.');
     } catch (error) {
-        alert(`Fejl ved gem af vedhæftning: ${error.message}`);
+        showError(`Fejl ved gem af vedhæftning: ${error.message}`);
     }
 }
 
@@ -457,8 +627,9 @@ async function handleConvertAttachment(preparedId, attachmentId, sourceIdx) {
             body: JSON.stringify({ rawAttachmentIdx: sourceIdx })
         });
         await loadHearingDetail(state.currentId);
+        showSuccess('Vedhæftning konverteret.');
     } catch (error) {
-        alert(`Konvertering mislykkedes: ${error.message}`);
+        showError(`Konvertering mislykkedes: ${error.message}`);
     }
 }
 
@@ -470,6 +641,8 @@ async function handleSaveMaterial(materialId) {
     const material = (state.detail.prepared?.materials || []).find(m => Number(m.materialId) === Number(materialId));
     if (!material) return;
     try {
+        // Auto-approve when saving
+        const now = Date.now();
         await fetchJson(`/api/gdpr/hearing/${state.currentId}/materials`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -480,12 +653,15 @@ async function handleSaveMaterial(materialId) {
                 sourceUrl: material.sourceUrl,
                 uploadedPath: material.uploadedPath,
                 contentMd: textArea.value,
-                approved: approvedCheckbox.checked
+                approved: true,
+                approvedAt: now
             })
         });
+        approvedCheckbox.checked = true;
         await loadHearingDetail(state.currentId);
+        showSuccess('Materiale gemt og godkendt.');
     } catch (error) {
-        alert(`Fejl ved gem af materiale: ${error.message}`);
+        showError(`Fejl ved gem af materiale: ${error.message}`);
     }
 }
 
@@ -494,8 +670,9 @@ async function handleDeleteMaterial(materialId) {
     try {
         await fetchJson(`/api/gdpr/hearing/${state.currentId}/materials/${materialId}`, { method: 'DELETE' });
         await loadHearingDetail(state.currentId);
+        showSuccess('Materiale slettet.');
     } catch (error) {
-        alert(`Kunne ikke slette materiale: ${error.message}`);
+        showError(`Kunne ikke slette materiale: ${error.message}`);
     }
 }
 
@@ -524,24 +701,27 @@ async function handleUploadMaterial(file) {
             })
         });
         await loadHearingDetail(state.currentId);
+        showSuccess('Fil uploadet.');
     } catch (error) {
-        alert(`Filupload mislykkedes: ${error.message}`);
+        showError(`Filupload mislykkedes: ${error.message}`);
     }
 }
 
 async function handlePublish() {
     if (!state.currentId) return;
-    const onlyApproved = detailEl.querySelector('#publish-only-approved')?.checked ?? true;
+    const confirmPublish = confirm('Vil du publicere alle godkendte svar og materiale? Kun godkendte elementer vil blive publiceret.');
+    if (!confirmPublish) return;
     try {
+        // Always publish only approved (onlyApproved defaults to true)
         await fetchJson(`/api/gdpr/hearing/${state.currentId}/publish`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ onlyApproved })
+            body: JSON.stringify({ onlyApproved: true })
         });
         await Promise.all([loadHearings(), loadHearingDetail(state.currentId)]);
-        alert('Høringen er publiceret til hovedsiden.');
+        showSuccess('Høringen er publiceret til hovedsiden. Kun godkendte svar og materiale er blevet publiceret.');
     } catch (error) {
-        alert(`Kunne ikke publicere: ${error.message}`);
+        showError(`Kunne ikke publicere: ${error.message}`);
     }
 }
 
@@ -550,9 +730,9 @@ async function handleRebuildVector() {
     try {
         await fetchJson(`/api/gdpr/hearing/${state.currentId}/vector-store/rebuild`, { method: 'POST' });
         await loadHearingDetail(state.currentId);
-        alert('Kontekst er genopbygget.');
+        showSuccess('Kontekst er genopbygget.');
     } catch (error) {
-        alert(`Kunne ikke genopbygge kontekst: ${error.message}`);
+        showError(`Kunne ikke genopbygge kontekst: ${error.message}`);
     }
 }
 
@@ -563,8 +743,9 @@ async function handleResetPrepared(preparedId) {
     try {
         await fetchJson(`/api/gdpr/hearing/${state.currentId}/responses/${preparedId}/reset`, { method: 'POST' });
         await loadHearingDetail(state.currentId);
+        showSuccess('Svar nulstillet til original.');
     } catch (error) {
-        alert(`Kunne ikke nulstille svaret: ${error.message}`);
+        showError(`Kunne ikke nulstille svaret: ${error.message}`);
     }
 }
 
@@ -575,9 +756,9 @@ async function handleResetHearing() {
     try {
         await fetchJson(`/api/gdpr/hearing/${state.currentId}/reset`, { method: 'POST' });
         await Promise.all([loadHearings(), loadHearingDetail(state.currentId)]);
-        alert('Høringen er nulstillet. De originale høringssvar og materiale er hentet igen fra blivhørt.');
+        showSuccess('Høringen er nulstillet. De originale høringssvar og materiale er hentet igen fra blivhørt.');
     } catch (error) {
-        alert(`Kunne ikke nulstille høringen: ${error.message}`);
+        showError(`Kunne ikke nulstille høringen: ${error.message}`);
     }
 }
 
@@ -643,9 +824,14 @@ detailEl.addEventListener('change', async (event) => {
 });
 
 async function init() {
-    await loadHearings();
-    if (state.hearings.length) {
-        await selectHearing(state.hearings[0].hearingId);
+    // Don't auto-load hearings - user must use settings modal to search and fetch
+    if (state.hearings.length === 0) {
+        detailEl.innerHTML = `
+            <div class="detail-section">
+                <h2>Ingen høringer</h2>
+                <p>Brug indstillinger (⚙️) for at søge og hente høringer.</p>
+            </div>
+        `;
     }
 }
 
