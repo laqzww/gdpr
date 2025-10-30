@@ -833,6 +833,252 @@ async function init() {
             </div>
         `;
     }
+    setupSettingsModal();
+    setupEventListeners();
+}
+
+function setupSettingsModal() {
+    const settingsBtn = document.getElementById('settings-btn');
+    const settingsModalBackdrop = document.getElementById('settings-modal-backdrop');
+    const settingsModalClose = document.getElementById('settings-modal-close');
+    const hearingSearchInput = document.getElementById('hearing-search-input');
+    
+    if (!settingsBtn || !settingsModalBackdrop) {
+        console.warn('Settings modal elements not found');
+        return;
+    }
+    
+    function openSettingsModal() {
+        settingsModalBackdrop.classList.add('show');
+        if (hearingSearchInput) {
+            setTimeout(() => hearingSearchInput.focus(), 100);
+        }
+    }
+    
+    function closeSettingsModal() {
+        settingsModalBackdrop.classList.remove('show');
+        if (hearingSearchInput) {
+            hearingSearchInput.value = '';
+            hideSuggestions();
+        }
+    }
+    
+    settingsBtn.addEventListener('click', openSettingsModal);
+    if (settingsModalClose) {
+        settingsModalClose.addEventListener('click', closeSettingsModal);
+    }
+    settingsModalBackdrop.addEventListener('click', (e) => {
+        if (e.target === settingsModalBackdrop) {
+            closeSettingsModal();
+        }
+    });
+    
+    // Setup search functionality
+    if (hearingSearchInput) {
+        setupHearingSearch(hearingSearchInput);
+    }
+}
+
+let searchTimeout;
+let cachedSearchIndex = null;
+let lastIndexFetch = 0;
+const INDEX_CACHE_TIME = 0;
+let currentSearchToken = 0;
+let lastSuggestionsKey = '';
+
+async function loadSearchIndex() {
+    const noStoreOpts = { cache: 'no-store', headers: { 'Cache-Control': 'no-cache, no-store, must-revalidate' } };
+    try {
+        const response = await fetch('/api/hearing-index?db=1', noStoreOpts);
+        const data = await response.json().catch(() => ({}));
+        if (data && data.success && Array.isArray(data.hearings)) {
+            cachedSearchIndex = data.hearings;
+            lastIndexFetch = Date.now();
+            return data.hearings;
+        }
+    } catch (error) {
+        console.error('Failed to load search index:', error);
+    }
+    cachedSearchIndex = [];
+    lastIndexFetch = Date.now();
+    return [];
+}
+
+async function searchLocally(query) {
+    if (!cachedSearchIndex || INDEX_CACHE_TIME === 0 || Date.now() - lastIndexFetch > INDEX_CACHE_TIME) {
+        await loadSearchIndex();
+    }
+    
+    if (!cachedSearchIndex) return [];
+    
+    const q = query.toLowerCase();
+    const isNumeric = /^\d+$/.test(query);
+    
+    return cachedSearchIndex
+        .filter(h => {
+            if (isNumeric) {
+                return String(h.id).includes(query);
+            }
+            const title = (h.title || '').toLowerCase();
+            return title.includes(q) || String(h.id).includes(query);
+        })
+        .slice(0, 20);
+}
+
+function sortSuggestionsForQuery(suggestions, query) {
+    const isNumeric = /^\d+$/.test(query);
+    if (!isNumeric) return suggestions;
+    const exact = [], starts = [], contains = [], others = [];
+    for (const item of suggestions) {
+        const idStr = String(item.id || '');
+        if (idStr === query) exact.push(item);
+        else if (idStr.startsWith(query)) starts.push(item);
+        else if (idStr.includes(query)) contains.push(item);
+        else others.push(item);
+    }
+    return [].concat(exact, starts, contains, others);
+}
+
+function displaySuggestions(suggestions) {
+    const suggestionsDiv = document.getElementById('hearing-search-suggestions');
+    if (!suggestionsDiv) return;
+    
+    if (suggestions.length === 0) {
+        hideSuggestions();
+        return;
+    }
+    
+    const inputEl = document.getElementById('hearing-search-input');
+    const currentQuery = inputEl ? inputEl.value.trim() : '';
+    const sorted = sortSuggestionsForQuery(suggestions, currentQuery);
+    
+    const newKey = sorted.map(h => `${h.id}:${(h.title||'').trim()}`).join('|');
+    if (newKey === lastSuggestionsKey) {
+        return;
+    }
+    lastSuggestionsKey = newKey;
+    
+    suggestionsDiv.innerHTML = sorted.map(h => {
+        const safeTitle = (h.title && String(h.title).trim()) ? h.title : `Høring ${h.id}`;
+        const deadline = h.deadline ? formatDeadlineShort(h.deadline) : 'Ingen frist';
+        
+        return `
+            <div class="suggestion-item" data-id="${h.id}" onclick="window.handleSelectHearingFromSearch(${h.id})">
+                <div class="suggestion-content">
+                    <div class="suggestion-title">${safeTitle}</div>
+                    <div class="suggestion-meta">
+                        <span>ID: ${h.id}</span>
+                        <span>•</span>
+                        <span>${deadline}</span>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join('');
+    
+    suggestionsDiv.style.display = 'block';
+}
+
+function hideSuggestions() {
+    const el = document.getElementById('hearing-search-suggestions');
+    if (!el) return;
+    el.style.display = 'none';
+    lastSuggestionsKey = '';
+}
+
+window.handleSelectHearingFromSearch = async function(hearingId) {
+    const input = document.getElementById('hearing-search-input');
+    if (input) input.value = '';
+    hideSuggestions();
+    await handleFetchHearingById(hearingId);
+};
+
+function setupHearingSearch(input) {
+    input.addEventListener('input', async () => {
+        clearTimeout(searchTimeout);
+        const query = input.value.trim();
+        
+        if (query.length < 2) {
+            hideSuggestions();
+            return;
+        }
+        
+        searchTimeout = setTimeout(async () => {
+            const token = ++currentSearchToken;
+            try {
+                const latest = input.value.trim();
+                if (latest !== query) return;
+                
+                const localResults = await searchLocally(query);
+                displaySuggestions(localResults || []);
+            } catch (error) {
+                if (error && error.name === 'AbortError') return;
+                console.error('Search error:', error);
+            }
+        }, 100);
+    });
+    
+    input.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            hideSuggestions();
+        }
+    });
+}
+
+async function handleFetchHearingById(hearingIdParam) {
+    const hearingId = hearingIdParam || document.getElementById('hearing-search-input')?.value?.trim();
+    if (!hearingId || !/^\d+$/.test(hearingId)) {
+        showError('Indtast et gyldigt hørings-ID');
+        return;
+    }
+    const id = Number(hearingId);
+    
+    const loadingHtml = `
+        <div class="loading-indicator" style="width:100%;justify-content:center;margin-top:var(--space-sm);">
+            <div class="loading-spinner"></div>
+            <span>Henter høringssvar...</span>
+        </div>
+    `;
+    
+    let loadingElement = null;
+    const hearingSearchInput = document.getElementById('hearing-search-input');
+    if (hearingSearchInput && hearingSearchInput.parentElement) {
+        loadingElement = document.createElement('div');
+        loadingElement.innerHTML = loadingHtml;
+        hearingSearchInput.parentElement.appendChild(loadingElement.firstElementChild);
+        hearingSearchInput.disabled = true;
+    }
+    
+    try {
+        await fetchJson(`/api/gdpr/hearing/${id}/refresh-raw`, { method: 'POST' });
+        await loadHearings();
+        await selectHearing(id);
+        if (hearingSearchInput) hearingSearchInput.value = '';
+        hideSuggestions();
+        
+        const settingsModalBackdrop = document.getElementById('settings-modal-backdrop');
+        if (settingsModalBackdrop && settingsModalBackdrop.classList.contains('show')) {
+            settingsModalBackdrop.classList.remove('show');
+            setTimeout(() => {
+                showSuccess('Høringssvar er hentet og høringen er tilføjet til listen.');
+            }, 300);
+        } else {
+            showSuccess('Høringssvar er hentet og høringen er tilføjet til listen.');
+        }
+    } catch (error) {
+        showError(`Kunne ikke hente høringssvar: ${error.message}`);
+    } finally {
+        if (loadingElement) {
+            loadingElement.remove();
+        }
+        if (hearingSearchInput) {
+            hearingSearchInput.disabled = false;
+        }
+    }
+}
+
+function setupEventListeners() {
+    // Already set up in the code above
 }
 
 init().catch(error => {

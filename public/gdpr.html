@@ -297,6 +297,150 @@
             opacity: 0.5;
             cursor: not-allowed;
         }
+        /* Settings Modal */
+        .settings-modal-backdrop {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+            backdrop-filter: blur(4px);
+            align-items: center;
+            justify-content: center;
+        }
+        .settings-modal-backdrop.show {
+            display: flex;
+        }
+        .settings-modal {
+            background: var(--color-white);
+            border-radius: var(--radius-lg);
+            box-shadow: var(--shadow-xl);
+            max-width: 600px;
+            width: 90%;
+            max-height: 90vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        .settings-modal-header {
+            padding: var(--space-lg) var(--space-xl);
+            border-bottom: 1px solid var(--color-gray-200);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .settings-modal-header h3 {
+            margin: 0;
+            font-size: var(--font-size-xl);
+        }
+        .settings-modal-body {
+            padding: var(--space-xl);
+            overflow-y: auto;
+        }
+        .settings-group {
+            margin-bottom: var(--space-lg);
+        }
+        .settings-label {
+            display: block;
+            font-weight: 600;
+            margin-bottom: var(--space-xs);
+            color: var(--color-dark);
+        }
+        .hearing-fetch-group {
+            position: relative;
+        }
+        #hearing-search-input {
+            width: 100%;
+        }
+        .suggestion-item {
+            padding: var(--space-sm) var(--space-md);
+            border-bottom: 1px solid var(--color-gray-200);
+            cursor: pointer;
+            transition: background-color var(--transition-fast);
+        }
+        .suggestion-item:hover {
+            background-color: var(--color-gray-50);
+        }
+        .suggestion-item:last-child {
+            border-bottom: none;
+        }
+        .suggestion-content {
+            display: flex;
+            flex-direction: column;
+            gap: var(--space-xs);
+        }
+        .suggestion-title {
+            font-weight: 600;
+            color: var(--color-dark);
+            font-size: var(--font-size-sm);
+        }
+        .suggestion-meta {
+            display: flex;
+            align-items: center;
+            gap: var(--space-xs);
+            font-size: var(--font-size-xs);
+            color: var(--color-gray-600);
+        }
+        .suggestion-meta span {
+            display: inline-block;
+        }
+        /* Publish Footer */
+        .publish-footer {
+            position: sticky;
+            bottom: 0;
+            z-index: 100;
+            background: var(--color-white);
+            border-top: 2px solid var(--color-primary);
+            box-shadow: 0 -4px 12px rgba(90, 83, 75, 0.1);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+        }
+        .publish-footer-content {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: var(--space-lg);
+            padding: var(--space-md) var(--space-xl);
+        }
+        .publish-footer-info {
+            display: flex;
+            flex-direction: column;
+            gap: var(--space-xs);
+        }
+        .publish-footer-text {
+            font-weight: 600;
+            color: var(--color-dark);
+        }
+        .publish-footer-hint {
+            font-size: var(--font-size-sm);
+            color: var(--color-gray-600);
+        }
+        .publish-footer-btn {
+            white-space: nowrap;
+        }
+        .loading-indicator {
+            display: flex;
+            align-items: center;
+            gap: var(--space-sm);
+            color: var(--color-gray-600);
+            font-size: var(--font-size-sm);
+            font-weight: 500;
+        }
+        .loading-spinner {
+            border: 3px solid var(--color-gray-200);
+            border-top: 3px solid var(--color-primary);
+            border-radius: 50%;
+            width: 18px;
+            height: 18px;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
         @media (max-width: 1100px) {
             main {
                 grid-template-columns: 1fr;
@@ -319,6 +463,12 @@
             <p style="margin:0; opacity:0.85">Manuel kvalitetssikring af høringssvar og materiale inden publicering</p>
         </div>
         <nav>
+            <button class="btn btn-icon" id="settings-btn" style="color:var(--color-white);background:transparent;border:none;cursor:pointer;" title="Indstillinger">
+                <svg class="icon" style="width:24px;height:24px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"></path>
+                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                </svg>
+            </button>
             <a href="/" style="color:var(--color-white); text-decoration:underline;">Tilbage til forsiden</a>
         </nav>
     </header>
@@ -415,6 +565,39 @@
             <textarea data-role="material-text"></textarea>
         </div>
     </template>
+
+    <!-- Settings Modal -->
+    <div id="settings-modal-backdrop" class="settings-modal-backdrop">
+        <div class="settings-modal">
+            <div class="settings-modal-header">
+                <h3>Indstillinger</h3>
+                <button class="btn btn-icon btn-ghost" id="settings-modal-close">
+                    <svg class="icon" style="width:20px;height:20px;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <div class="settings-modal-body">
+                <div class="settings-group">
+                    <label class="settings-label">Søg og hent høringer</label>
+                    <p style="margin:var(--space-xs) 0 var(--space-sm) 0;font-size:var(--font-size-sm);color:var(--color-gray-600);">
+                        Søg efter høringer i indexet eller indtast et hørings-ID. Klik på et resultat for at hente høringssvar.
+                    </p>
+                    <div style="position:relative;">
+                        <div class="hearing-fetch-group" style="display:flex;gap:var(--space-xs);">
+                            <svg class="icon" style="position:absolute;left:var(--space-sm);top:50%;transform:translateY(-50%);width:18px;height:18px;color:var(--color-gray-400);pointer-events:none;z-index:1;">
+                                <circle cx="11" cy="11" r="8"></circle>
+                                <path d="m21 21-4.35-4.35"></path>
+                            </svg>
+                            <input type="text" id="hearing-search-input" placeholder="Søg høring..." style="flex:1;padding:var(--space-xs) var(--space-sm) var(--space-xs) calc(var(--space-sm) + 24px);border:1px solid var(--color-gray-300);border-radius:var(--radius-sm);font-size:var(--font-size-sm);" autocomplete="off">
+                        </div>
+                        <div id="hearing-search-suggestions" class="suggestions-dropdown" style="position:absolute;top:calc(100% + var(--space-xs));left:0;right:0;background:var(--color-white);border:1px solid var(--color-gray-300);border-radius:var(--radius-sm);box-shadow:var(--shadow-lg);max-height:400px;overflow-y:auto;z-index:100;display:none;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <script type="module" src="/js/gdpr.js?v=1"></script>
 </body>
