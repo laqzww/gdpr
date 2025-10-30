@@ -31,10 +31,12 @@ catch (_) { SQLiteStore = null; }
 const cron = require('node-cron');
 
 // Wrap db/sqlite require in try-catch to handle better-sqlite3 load failures gracefully
-let initDb, sqliteDb, upsertHearing, replaceRawResponses, replaceResponses, replaceRawMaterials, replaceMaterials, readAggregate, getRawAggregate, getPublishedAggregate, getPreparationState, updatePreparationState, recalcPreparationProgress, upsertPreparedResponse, deletePreparedResponse, upsertPreparedAttachment, deletePreparedAttachment, upsertPreparedMaterial, deletePreparedMaterial, listPreparedHearings, getPreparedBundle, publishPreparedHearing, replaceVectorChunks, listVectorChunks, getSessionEdits, upsertSessionEdit, setMaterialFlag, getMaterialFlags, addUpload, listUploads, markHearingComplete, isHearingComplete, setHearingArchived, listHearingsByStatusLike, listAllHearingIds;
+let initDb, sqliteModule, sqliteDb, upsertHearing, replaceRawResponses, replaceResponses, replaceRawMaterials, replaceMaterials, readAggregate, getRawAggregate, getPublishedAggregate, getPreparationState, updatePreparationState, recalcPreparationProgress, upsertPreparedResponse, deletePreparedResponse, upsertPreparedAttachment, deletePreparedAttachment, upsertPreparedMaterial, deletePreparedMaterial, listPreparedHearings, getPreparedBundle, publishPreparedHearing, replaceVectorChunks, listVectorChunks, getSessionEdits, upsertSessionEdit, setMaterialFlag, getMaterialFlags, addUpload, listUploads, markHearingComplete, isHearingComplete, setHearingArchived, listHearingsByStatusLike, listAllHearingIds;
 try {
-    const sqlite = require('./db/sqlite');
-    ({ init: initDb, db: sqliteDb, upsertHearing, replaceRawResponses, replaceResponses, replaceRawMaterials, replaceMaterials, readAggregate, getRawAggregate, getPublishedAggregate, getPreparationState, updatePreparationState, recalcPreparationProgress, upsertPreparedResponse, deletePreparedResponse, upsertPreparedAttachment, deletePreparedAttachment, upsertPreparedMaterial, deletePreparedMaterial, listPreparedHearings, getPreparedBundle, publishPreparedHearing, replaceVectorChunks, listVectorChunks, getSessionEdits, upsertSessionEdit, setMaterialFlag, getMaterialFlags, addUpload, listUploads, markHearingComplete, isHearingComplete, setHearingArchived, listHearingsByStatusLike, listAllHearingIds } = sqlite);
+    sqliteModule = require('./db/sqlite');
+    ({ init: initDb, upsertHearing, replaceRawResponses, replaceResponses, replaceRawMaterials, replaceMaterials, readAggregate, getRawAggregate, getPublishedAggregate, getPreparationState, updatePreparationState, recalcPreparationProgress, upsertPreparedResponse, deletePreparedResponse, upsertPreparedAttachment, deletePreparedAttachment, upsertPreparedMaterial, deletePreparedMaterial, listPreparedHearings, getPreparedBundle, publishPreparedHearing, replaceVectorChunks, listVectorChunks, getSessionEdits, upsertSessionEdit, setMaterialFlag, getMaterialFlags, addUpload, listUploads, markHearingComplete, isHearingComplete, setHearingArchived, listHearingsByStatusLike, listAllHearingIds } = sqliteModule);
+    // Get initial db reference (will be updated after initDb() is called)
+    sqliteDb = sqliteModule.db;
     console.log('[Server] SQLite module loaded successfully');
 } catch (e) {
     console.error('[Server] CRITICAL: Failed to load SQLite module:', e.message);
@@ -340,9 +342,47 @@ function allocatePreparedMaterialId(hearingId) {
 
 function ensurePreparedResponsesFromRaw(hearingId) {
     if (!hearingId) return;
-    if (!sqliteDb || typeof sqliteDb.prepare !== 'function') return;
+    // Get live db reference
+    const db = sqliteModule ? sqliteModule.db : sqliteDb;
+    if (!db || typeof db.prepare !== 'function') return;
     try {
-        const rawResponses = sqliteDb.prepare(`
+        // First, clean up duplicates - keep only one prepared response per source_response_id
+        const duplicates = db.prepare(`
+            SELECT source_response_id, COUNT(*) as count, MIN(prepared_id) as keep_id
+            FROM prepared_responses
+            WHERE hearing_id=? AND source_response_id IS NOT NULL
+            GROUP BY hearing_id, source_response_id
+            HAVING COUNT(*) > 1
+        `).all(hearingId);
+        
+        if (duplicates.length > 0) {
+            const tx = db.transaction(() => {
+                for (const dup of duplicates) {
+                    // Keep the one with approved status if any, otherwise keep the oldest
+                    const approvedOne = db.prepare(`
+                        SELECT prepared_id FROM prepared_responses
+                        WHERE hearing_id=? AND source_response_id=? AND approved=1
+                        ORDER BY prepared_id ASC LIMIT 1
+                    `).get(hearingId, dup.source_response_id);
+                    
+                    const keepId = approvedOne ? approvedOne.prepared_id : dup.keep_id;
+                    
+                    // Delete all except the one to keep
+                    const toDelete = db.prepare(`
+                        SELECT prepared_id FROM prepared_responses
+                        WHERE hearing_id=? AND source_response_id=? AND prepared_id != ?
+                    `).all(hearingId, dup.source_response_id, keepId);
+                    
+                    for (const row of toDelete) {
+                        db.prepare(`DELETE FROM prepared_attachments WHERE hearing_id=? AND prepared_id=?`).run(hearingId, row.prepared_id);
+                        db.prepare(`DELETE FROM prepared_responses WHERE hearing_id=? AND prepared_id=?`).run(hearingId, row.prepared_id);
+                    }
+                }
+            });
+            tx();
+        }
+
+        const rawResponses = db.prepare(`
             SELECT response_id as responseId, text, author, organization, on_behalf_of as onBehalfOf, submitted_at as submittedAt
             FROM raw_responses
             WHERE hearing_id=?
@@ -350,21 +390,27 @@ function ensurePreparedResponsesFromRaw(hearingId) {
         `).all(hearingId);
         if (!Array.isArray(rawResponses) || !rawResponses.length) return;
 
-        const existing = sqliteDb.prepare(`
-            SELECT source_response_id as sourceResponseId
+        const existing = db.prepare(`
+            SELECT source_response_id as sourceResponseId, approved, approved_at
             FROM prepared_responses
             WHERE hearing_id=?
         `).all(hearingId);
 
         const existingSources = new Set();
+        const existingApproved = new Map(); // Track approved status
         for (const row of existing || []) {
             const src = row?.sourceResponseId;
             if (src === null || src === undefined) continue;
             const normalized = Number(src);
-            if (Number.isFinite(normalized)) existingSources.add(normalized);
+            if (Number.isFinite(normalized)) {
+                existingSources.add(normalized);
+                if (row.approved) {
+                    existingApproved.set(normalized, row.approved_at);
+                }
+            }
         }
 
-        const selectAttachments = sqliteDb.prepare(`
+        const selectAttachments = db.prepare(`
             SELECT idx as attachmentIdx, filename, url
             FROM raw_attachments
             WHERE hearing_id=? AND response_id=?
@@ -378,10 +424,14 @@ function ensurePreparedResponsesFromRaw(hearingId) {
             const attachments = selectAttachments.all(hearingId, sourceId) || [];
             const preparedId = allocatePreparedResponseId(hearingId);
 
+            // Check if this should be auto-approved (preserve approved status)
+            const wasApproved = existingApproved.has(sourceId);
+            const approvedAt = wasApproved ? existingApproved.get(sourceId) : null;
+
             upsertPreparedResponse(hearingId, preparedId, {
                 sourceResponseId: sourceId,
-                respondentName: raw.author || null,
-                respondentType: null,
+                respondentName: 'Borger', // Standard skal være "Borger" - ikke bruge navne fra blivhørt
+                respondentType: 'Borger', // Standard skal være "Borger"
                 author: raw.author || null,
                 organization: raw.organization || null,
                 onBehalfOf: raw.onBehalfOf || null,
@@ -389,7 +439,8 @@ function ensurePreparedResponsesFromRaw(hearingId) {
                 textMd: raw.text || '',
                 hasAttachments: Array.isArray(attachments) && attachments.length > 0,
                 attachmentsReady: false,
-                approved: false
+                approved: wasApproved || false,
+                approvedAt: approvedAt
             });
 
             attachments.forEach((attachment, idx) => {
@@ -402,7 +453,8 @@ function ensurePreparedResponsesFromRaw(hearingId) {
                     sourceUrl: attachment.url || null,
                     convertedMd: null,
                     conversionStatus: null,
-                    approved: false
+                    approved: false,
+                    notes: null
                 });
             });
 
@@ -414,7 +466,9 @@ function ensurePreparedResponsesFromRaw(hearingId) {
 }
 
 function ensurePreparedResponsesForAllHearings() {
-    if (!sqliteDb || typeof sqliteDb.prepare !== 'function') return;
+    // Get live db reference
+    const db = sqliteModule ? sqliteModule.db : sqliteDb;
+    if (!db || typeof db.prepare !== 'function') return;
     if (typeof listAllHearingIds !== 'function') return;
     try {
         const ids = listAllHearingIds();
@@ -641,6 +695,10 @@ console.log('[Server] Current directory:', __dirname);
 console.log('[Server] Data directory:', path.join(__dirname, 'data'));
 try { 
     initDb(); 
+    // Update sqliteDb reference after initialization
+    if (sqliteModule) {
+        sqliteDb = sqliteModule.db;
+    }
     // Prime a trivial statement to ensure better-sqlite3 loads and DB file is touchable
     const sqlite = require('./db/sqlite');
     try { if (sqlite && sqlite.db && sqlite.db.prepare) sqlite.db.prepare('SELECT 1').get(); } catch {}
@@ -5419,7 +5477,9 @@ app.post('/api/gdpr/hearing/:id/responses/:preparedId/reset', async (req, res) =
     const hearingId = toInt(req.params.id);
     const preparedId = toInt(req.params.preparedId);
     if (!hearingId || !preparedId) return res.status(400).json({ success: false, error: 'Ugyldige parametre' });
-    if (!sqliteDb || typeof sqliteDb.prepare !== 'function') {
+    // Get live db reference
+    const db = sqliteModule ? sqliteModule.db : sqliteDb;
+    if (!db || typeof db.prepare !== 'function') {
         return res.status(500).json({ success: false, error: 'Database utilgængelig' });
     }
     try {
@@ -5428,7 +5488,7 @@ app.post('/api/gdpr/hearing/:id/responses/:preparedId/reset', async (req, res) =
         console.warn('[GDPR] ensurePreparedResponsesFromRaw (reset single) failed:', error?.message || error);
     }
     try {
-        const preparedRow = sqliteDb.prepare(`
+        const preparedRow = db.prepare(`
             SELECT prepared_id as preparedId, source_response_id as sourceResponseId
             FROM prepared_responses
             WHERE hearing_id=? AND prepared_id=?
@@ -5441,7 +5501,7 @@ app.post('/api/gdpr/hearing/:id/responses/:preparedId/reset', async (req, res) =
             return res.status(400).json({ success: false, error: 'Dette svar kan ikke nulstilles automatisk' });
         }
 
-        let raw = sqliteDb.prepare(`
+        let raw = db.prepare(`
             SELECT response_id as responseId, text, author, organization, on_behalf_of as onBehalfOf, submitted_at as submittedAt
             FROM raw_responses
             WHERE hearing_id=? AND response_id=?
@@ -5449,7 +5509,7 @@ app.post('/api/gdpr/hearing/:id/responses/:preparedId/reset', async (req, res) =
 
         if (!raw) {
             try { await hydrateHearingDirect(hearingId); } catch (error) { console.warn('[GDPR] hydrate during reset single failed:', error?.message || error); }
-            raw = sqliteDb.prepare(`
+            raw = db.prepare(`
                 SELECT response_id as responseId, text, author, organization, on_behalf_of as onBehalfOf, submitted_at as submittedAt
                 FROM raw_responses
                 WHERE hearing_id=? AND response_id=?
@@ -5460,12 +5520,12 @@ app.post('/api/gdpr/hearing/:id/responses/:preparedId/reset', async (req, res) =
             return res.status(404).json({ success: false, error: 'Originalt svar kunne ikke findes' });
         }
 
-        const clearAttachments = sqliteDb.transaction(() => {
-            sqliteDb.prepare(`DELETE FROM prepared_attachments WHERE hearing_id=? AND prepared_id=?`).run(hearingId, preparedId);
+        const clearAttachments = db.transaction(() => {
+            db.prepare(`DELETE FROM prepared_attachments WHERE hearing_id=? AND prepared_id=?`).run(hearingId, preparedId);
         });
         clearAttachments();
 
-        const rawAttachments = sqliteDb.prepare(`
+        const rawAttachments = db.prepare(`
             SELECT idx as attachmentIdx, filename, url
             FROM raw_attachments
             WHERE hearing_id=? AND response_id=?
@@ -5474,8 +5534,8 @@ app.post('/api/gdpr/hearing/:id/responses/:preparedId/reset', async (req, res) =
 
         upsertPreparedResponse(hearingId, preparedId, {
             sourceResponseId: sourceId,
-            respondentName: raw.author || null,
-            respondentType: null,
+            respondentName: 'Borger', // Standard skal være "Borger" - ikke bruge navne fra blivhørt
+            respondentType: 'Borger', // Standard skal være "Borger"
             author: raw.author || null,
             organization: raw.organization || null,
             onBehalfOf: raw.onBehalfOf || null,
@@ -5509,6 +5569,182 @@ app.post('/api/gdpr/hearing/:id/responses/:preparedId/reset', async (req, res) =
     }
 });
 
+app.post('/api/gdpr/hearing/:id/refresh-raw', async (req, res) => {
+    const hearingId = toInt(req.params.id);
+    if (!hearingId) return res.status(400).json({ success: false, error: 'Ugyldigt hørings-ID' });
+    // Get live db reference
+    const db = sqliteModule ? sqliteModule.db : sqliteDb;
+    if (!db || typeof db.prepare !== 'function') {
+        return res.status(500).json({ success: false, error: 'Database utilgængelig' });
+    }
+    try {
+        // Fetch fresh raw data from blivhørt
+        await hydrateHearingDirect(hearingId);
+        
+        // Get existing approved prepared responses to preserve
+        const existingApproved = db.prepare(`
+            SELECT prepared_id, source_response_id, approved, approved_at
+            FROM prepared_responses
+            WHERE hearing_id=? AND approved=1
+        `).all(hearingId);
+        
+        const approvedBySourceId = new Map();
+        for (const row of existingApproved) {
+            if (row.source_response_id !== null && row.source_response_id !== undefined) {
+                approvedBySourceId.set(Number(row.source_response_id), {
+                    preparedId: row.prepared_id,
+                    approvedAt: row.approved_at
+                });
+            }
+        }
+        
+        // Ensure prepared responses exist for all raw responses
+        // This will only create new ones, not overwrite existing
+        ensurePreparedResponsesFromRaw(hearingId);
+        
+        // Restore approved status for previously approved responses
+        if (approvedBySourceId.size > 0) {
+            const tx = db.transaction(() => {
+                for (const [sourceId, info] of approvedBySourceId.entries()) {
+                    // Find the prepared response for this source
+                    const prepared = db.prepare(`
+                        SELECT prepared_id FROM prepared_responses
+                        WHERE hearing_id=? AND source_response_id=?
+                        ORDER BY prepared_id ASC LIMIT 1
+                    `).get(hearingId, sourceId);
+                    
+                    if (prepared) {
+                        // Restore approved status
+                        db.prepare(`
+                            UPDATE prepared_responses
+                            SET approved=1, approved_at=?
+                            WHERE hearing_id=? AND prepared_id=?
+                        `).run(info.approvedAt || Date.now(), hearingId, prepared.prepared_id);
+                    }
+                }
+            });
+            tx();
+        }
+        
+        // Recalculate progress
+        recalcPreparationProgress(hearingId);
+        
+        // Automatically rebuild vector store if there are approved responses
+        // This ensures AI summarization has the latest approved content
+        const approvedCount = db.prepare(`SELECT COUNT(*) as c FROM prepared_responses WHERE hearing_id=? AND approved=1`).get(hearingId)?.c || 0;
+        if (approvedCount > 0) {
+            try {
+                // Rebuild vector store in background (don't await)
+                setImmediate(async () => {
+                    try {
+                        await rebuildLocalVectorStore(hearingId);
+                    } catch (err) {
+                        console.warn('[GDPR] auto-rebuild vector store failed:', err.message);
+                    }
+                });
+            } catch (err) {
+                console.warn('[GDPR] failed to queue vector rebuild:', err.message);
+            }
+        }
+        
+        const bundle = getPreparedBundle(hearingId);
+        if (!bundle) return res.status(404).json({ success: false, error: 'Høring ikke fundet' });
+        res.json({ success: true, bundle });
+    } catch (error) {
+        console.error('[GDPR] refresh raw failed:', error);
+        res.status(500).json({ success: false, error: 'Kunne ikke opdatere fra blivhørt' });
+    }
+});
+
+app.post('/api/gdpr/hearing/:id/cleanup-duplicates', async (req, res) => {
+    const hearingId = toInt(req.params.id);
+    if (!hearingId) return res.status(400).json({ success: false, error: 'Ugyldigt hørings-ID' });
+    // Get live db reference
+    const db = sqliteModule ? sqliteModule.db : sqliteDb;
+    if (!db || typeof db.prepare !== 'function') {
+        return res.status(500).json({ success: false, error: 'Database utilgængelig' });
+    }
+    try {
+        // Find and remove duplicates - keep only one prepared response per source_response_id
+        const duplicates = db.prepare(`
+            SELECT source_response_id, COUNT(*) as count, MIN(prepared_id) as keep_id
+            FROM prepared_responses
+            WHERE hearing_id=? AND source_response_id IS NOT NULL
+            GROUP BY hearing_id, source_response_id
+            HAVING COUNT(*) > 1
+        `).all(hearingId);
+        
+        let deletedCount = 0;
+        if (duplicates.length > 0) {
+            const tx = db.transaction(() => {
+                for (const dup of duplicates) {
+                    // Get IDs to delete (all except the one to keep)
+                    const toDelete = db.prepare(`
+                        SELECT prepared_id FROM prepared_responses
+                        WHERE hearing_id=? AND source_response_id=? AND prepared_id != ?
+                    `).all(hearingId, dup.source_response_id, dup.keep_id);
+                    
+                    for (const row of toDelete) {
+                        // Delete attachments first
+                        db.prepare(`DELETE FROM prepared_attachments WHERE hearing_id=? AND prepared_id=?`).run(hearingId, row.prepared_id);
+                        // Then delete the response
+                        db.prepare(`DELETE FROM prepared_responses WHERE hearing_id=? AND prepared_id=?`).run(hearingId, row.prepared_id);
+                        deletedCount++;
+                    }
+                }
+            });
+            tx();
+        }
+
+        // Also remove orphaned prepared responses (those without a source_response_id that matches a raw response)
+        const rawIds = db.prepare(`SELECT response_id FROM raw_responses WHERE hearing_id=?`).all(hearingId).map(r => r.response_id);
+        if (rawIds.length > 0) {
+            const placeholders = rawIds.map(() => '?').join(',');
+            const orphaned = db.prepare(`
+                SELECT prepared_id FROM prepared_responses
+                WHERE hearing_id=? AND (source_response_id IS NULL OR source_response_id NOT IN (${placeholders}))
+            `).all(hearingId, ...rawIds);
+            
+            if (orphaned.length > 0) {
+                const tx = db.transaction(() => {
+                    for (const row of orphaned) {
+                        db.prepare(`DELETE FROM prepared_attachments WHERE hearing_id=? AND prepared_id=?`).run(hearingId, row.prepared_id);
+                        db.prepare(`DELETE FROM prepared_responses WHERE hearing_id=? AND prepared_id=?`).run(hearingId, row.prepared_id);
+                        deletedCount++;
+                    }
+                });
+                tx();
+            }
+        } else {
+            // If no raw responses exist, remove all prepared responses without source_response_id
+            const orphaned = db.prepare(`
+                SELECT prepared_id FROM prepared_responses
+                WHERE hearing_id=? AND source_response_id IS NULL
+            `).all(hearingId);
+            
+            if (orphaned.length > 0) {
+                const tx = db.transaction(() => {
+                    for (const row of orphaned) {
+                        db.prepare(`DELETE FROM prepared_attachments WHERE hearing_id=? AND prepared_id=?`).run(hearingId, row.prepared_id);
+                        db.prepare(`DELETE FROM prepared_responses WHERE hearing_id=? AND prepared_id=?`).run(hearingId, row.prepared_id);
+                        deletedCount++;
+                    }
+                });
+                tx();
+            }
+        }
+
+        // Recalculate progress
+        recalcPreparationProgress(hearingId);
+        
+        const bundle = getPreparedBundle(hearingId);
+        res.json({ success: true, deletedCount, bundle });
+    } catch (error) {
+        console.error('[GDPR] cleanup duplicates failed:', error);
+        res.status(500).json({ success: false, error: 'Kunne ikke rydde duplikater' });
+    }
+});
+
 app.post('/api/gdpr/hearing/:id/reset', async (req, res) => {
     const hearingId = toInt(req.params.id);
     if (!hearingId) return res.status(400).json({ success: false, error: 'Ugyldigt hørings-ID' });
@@ -5517,29 +5753,55 @@ app.post('/api/gdpr/hearing/:id/reset', async (req, res) => {
     } catch (error) {
         console.warn('[GDPR] hydrate during reset failed:', error?.message || error);
     }
-    if (sqliteDb && typeof sqliteDb.prepare === 'function') {
-        try {
-            const tx = sqliteDb.transaction(() => {
-                sqliteDb.prepare(`DELETE FROM prepared_attachments WHERE hearing_id=?`).run(hearingId);
-                sqliteDb.prepare(`DELETE FROM prepared_responses WHERE hearing_id=?`).run(hearingId);
-                sqliteDb.prepare(`DELETE FROM prepared_materials WHERE hearing_id=?`).run(hearingId);
+    // Get live db reference
+    const db = sqliteModule ? sqliteModule.db : sqliteDb;
+    if (!db || typeof db.prepare !== 'function') {
+        return res.status(500).json({ success: false, error: 'Database utilgængelig' });
+    }
+    try {
+        const tx = db.transaction(() => {
+            db.prepare(`DELETE FROM prepared_attachments WHERE hearing_id=?`).run(hearingId);
+            db.prepare(`DELETE FROM prepared_responses WHERE hearing_id=?`).run(hearingId);
+            db.prepare(`DELETE FROM prepared_materials WHERE hearing_id=?`).run(hearingId);
+        });
+        tx();
+    } catch (error) {
+        console.error('[GDPR] reset hearing cleanup failed:', error);
+        return res.status(500).json({ success: false, error: 'Kunne ikke rydde klargjorte data' });
+    }
+    try {
+        ensurePreparedResponsesFromRaw(hearingId);
+        // Cleanup duplicates after ensuring prepared responses (in case duplicates were created)
+        const duplicates = db.prepare(`
+            SELECT source_response_id, COUNT(*) as count, MIN(prepared_id) as keep_id
+            FROM prepared_responses
+            WHERE hearing_id=? AND source_response_id IS NOT NULL
+            GROUP BY hearing_id, source_response_id
+            HAVING COUNT(*) > 1
+        `).all(hearingId);
+        if (duplicates.length > 0) {
+            const cleanupTx = db.transaction(() => {
+                for (const dup of duplicates) {
+                    const toDelete = db.prepare(`
+                        SELECT prepared_id FROM prepared_responses
+                        WHERE hearing_id=? AND source_response_id=? AND prepared_id != ?
+                    `).all(hearingId, dup.source_response_id, dup.keep_id);
+                    for (const row of toDelete) {
+                        db.prepare(`DELETE FROM prepared_attachments WHERE hearing_id=? AND prepared_id=?`).run(hearingId, row.prepared_id);
+                        db.prepare(`DELETE FROM prepared_responses WHERE hearing_id=? AND prepared_id=?`).run(hearingId, row.prepared_id);
+                    }
+                }
             });
-            tx();
-        } catch (error) {
-            console.error('[GDPR] reset hearing cleanup failed:', error);
-            return res.status(500).json({ success: false, error: 'Kunne ikke rydde klargjorte data' });
+            cleanupTx();
         }
-        try {
-            ensurePreparedResponsesFromRaw(hearingId);
-        } catch (error) {
-            console.warn('[GDPR] ensurePreparedResponsesFromRaw during reset failed:', error?.message || error);
-        }
-        try {
-            recalcPreparationProgress(hearingId);
-            updatePreparationState(hearingId, { status: 'draft', responses_ready: 0, materials_ready: 0, published_at: null, last_modified_at: Date.now() });
-        } catch (error) {
-            console.warn('[GDPR] reset hearing state update failed:', error?.message || error);
-        }
+    } catch (error) {
+        console.warn('[GDPR] ensurePreparedResponsesFromRaw during reset failed:', error?.message || error);
+    }
+    try {
+        recalcPreparationProgress(hearingId);
+        updatePreparationState(hearingId, { status: 'draft', responses_ready: 0, materials_ready: 0, published_at: null, last_modified_at: Date.now() });
+    } catch (error) {
+        console.warn('[GDPR] reset hearing state update failed:', error?.message || error);
     }
     const bundle = getPreparedBundle(hearingId);
     if (!bundle) return res.status(404).json({ success: false, error: 'Høring ikke fundet' });
@@ -5703,6 +5965,62 @@ app.post('/api/gdpr/hearing/:id/vector-store/rebuild', async (req, res) => {
     } catch (error) {
         console.error('[GDPR] rebuild vector store failed:', error);
         res.status(500).json({ success: false, error: error.message });
+    }
+});
+
+app.delete('/api/gdpr/hearing/:id', async (req, res) => {
+    const hearingId = toInt(req.params.id);
+    if (!hearingId) return res.status(400).json({ success: false, error: 'Ugyldigt hørings-ID' });
+    // Get live db reference
+    const db = sqliteModule ? sqliteModule.db : sqliteDb;
+    if (!db || typeof db.prepare !== 'function') {
+        return res.status(500).json({ success: false, error: 'Database utilgængelig' });
+    }
+    try {
+        const tx = db.transaction(() => {
+            // Delete all related data
+            db.prepare(`DELETE FROM vector_chunks WHERE hearing_id=?`).run(hearingId);
+            db.prepare(`DELETE FROM hearing_preparation_state WHERE hearing_id=?`).run(hearingId);
+            db.prepare(`DELETE FROM published_materials WHERE hearing_id=?`).run(hearingId);
+            db.prepare(`DELETE FROM published_attachments WHERE hearing_id=?`).run(hearingId);
+            db.prepare(`DELETE FROM published_responses WHERE hearing_id=?`).run(hearingId);
+            db.prepare(`DELETE FROM prepared_materials WHERE hearing_id=?`).run(hearingId);
+            db.prepare(`DELETE FROM prepared_attachments WHERE hearing_id=?`).run(hearingId);
+            db.prepare(`DELETE FROM prepared_responses WHERE hearing_id=?`).run(hearingId);
+            db.prepare(`DELETE FROM raw_materials WHERE hearing_id=?`).run(hearingId);
+            db.prepare(`DELETE FROM raw_attachments WHERE hearing_id=?`).run(hearingId);
+            db.prepare(`DELETE FROM raw_responses WHERE hearing_id=?`).run(hearingId);
+            db.prepare(`DELETE FROM hearings WHERE id=?`).run(hearingId);
+        });
+        tx();
+        res.json({ success: true });
+    } catch (error) {
+        console.error('[GDPR] delete hearing failed:', error);
+        res.status(500).json({ success: false, error: 'Kunne ikke slette høring' });
+    }
+});
+
+app.delete('/api/gdpr/hearing/:id/published', async (req, res) => {
+    const hearingId = toInt(req.params.id);
+    if (!hearingId) return res.status(400).json({ success: false, error: 'Ugyldigt hørings-ID' });
+    // Get live db reference
+    const db = sqliteModule ? sqliteModule.db : sqliteDb;
+    if (!db || typeof db.prepare !== 'function') {
+        return res.status(500).json({ success: false, error: 'Database utilgængelig' });
+    }
+    try {
+        const tx = db.transaction(() => {
+            db.prepare(`DELETE FROM published_responses WHERE hearing_id=?`).run(hearingId);
+            db.prepare(`DELETE FROM published_attachments WHERE hearing_id=?`).run(hearingId);
+            db.prepare(`DELETE FROM published_materials WHERE hearing_id=?`).run(hearingId);
+        });
+        tx();
+        // Update preparation state to remove published_at
+        updatePreparationState(hearingId, { published_at: null });
+        res.json({ success: true });
+    } catch (error) {
+        console.error('[GDPR] delete published failed:', error);
+        res.status(500).json({ success: false, error: 'Kunne ikke slette publicerede data' });
     }
 });
 
